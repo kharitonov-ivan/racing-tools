@@ -1,0 +1,168 @@
+{
+  "comment": "Channel name and units normalization mapping for telemetry devices",
+  "transformations": {
+    "comment": "Data transformations for specific device/channel combinations",
+    "alfano": {
+      "Speed GPS": {"scale": 0.1, "description": "Alfano stores speed as int*10"},
+      "Speed rear": {"scale": 0.1, "description": "Alfano stores speed as int*10"},
+      "Altitude": {"scale": 0.1, "description": "Alfano stores altitude as int*10"},
+      "Lat.": {"scale": 0.000001, "description": "Alfano stores lat as int*1000000"},
+      "Lon.": {"scale": 0.000001, "description": "Alfano stores lon as int*1000000"},
+      "Gf. X": {"scale": 0.01, "offset": -10.0, "auto_center": true, "description": "Alfano stores longitudinal G-force as int*100 and centered around 10"},
+      "Gf. Y": {"scale": -0.01, "offset": 10.0, "auto_center": true, "description": "Alfano stores longitudinal G-force as int*100, centered around 10, and needs inversion"},
+      "Orientation": {"scale": 0.01, "description": "Alfano stores heading as int*100"}
+    }
+  },
+  "standard_channels": {
+    "Time": {
+      "standard_name": "Time",
+      "unit": "s",
+      "aliases": ["Time"]
+    },
+    "GPS Speed": {
+      "standard_name": "GPS Speed",
+      "unit": "km/h",
+      "aliases": ["GPS Speed", "Speed GPS"]
+    },
+    "Wheel Speed": {
+      "standard_name": "Wheel Speed",
+      "unit": "km/h",
+      "aliases": ["Speed rear"]
+    },
+    "RPM": {
+      "standard_name": "RPM",
+      "unit": "rpm",
+      "aliases": ["RPM"]
+    },
+    "GPS Latitude": {
+      "standard_name": "GPS Latitude",
+      "unit": "deg",
+      "aliases": ["GPS Latitude", "Lat."]
+    },
+    "GPS Longitude": {
+      "standard_name": "GPS Longitude",
+      "unit": "deg",
+      "aliases": ["GPS Longitude", "Lon."]
+    },
+    "Altitude": {
+      "standard_name": "Altitude",
+      "unit": "m",
+      "aliases": ["GPS Altitude", "Altitude"]
+    },
+    "GPS Accel Lat": {
+      "standard_name": "GPS Accel Lat",
+      "unit": "g",
+      "aliases": ["GPS LatAcc", "Gf. X"]
+    },
+    "GPS Accel Long": {
+      "standard_name": "GPS Accel Long",
+      "unit": "g",
+      "aliases": ["GPS LonAcc", "Gf. Y"]
+    },
+    "IMU Accel Long": {
+      "standard_name": "IMU Accel Long",
+      "unit": "g",
+      "aliases": ["InlineAcc", "AccelerometerX"]
+    },
+    "IMU Accel Lat": {
+      "standard_name": "IMU Accel Lat",
+      "unit": "g",
+      "aliases": ["LateralAcc", "AccelerometerY"]
+    },
+    "IMU Accel Vert": {
+      "standard_name": "IMU Accel Vert",
+      "unit": "g",
+      "aliases": ["VerticalAcc", "AccelerometerZ"]
+    },
+    "Accel Lat Smoothed": {
+      "standard_name": "Accel Lat Smoothed",
+      "unit": "g",
+      "aliases": ["G Lat Smth"]
+    },
+    "Accel Long Smoothed": {
+      "standard_name": "Accel Long Smoothed",
+      "unit": "g",
+      "aliases": ["G Long Smth"]
+    },
+    "IMU Accel Lat Filtered": {
+      "standard_name": "IMU Accel Lat Filtered",
+      "unit": "g",
+      "aliases": ["G Lat imu f"]
+    },
+    "IMU Accel Long Filtered": {
+      "standard_name": "IMU Accel Long Filtered",
+      "unit": "g",
+      "aliases": ["G Long imu f"]
+    },
+    "GyroX": {
+      "standard_name": "GyroX",
+      "unit": "deg/s",
+      "aliases": ["GyroX"]
+    },
+    "GyroY": {
+      "standard_name": "GyroY",
+      "unit": "deg/s",
+      "aliases": ["GyroY"]
+    },
+    "GyroZ": {
+      "standard_name": "GyroZ",
+      "unit": "deg/s",
+      "aliases": ["GyroZ", "GPS Gyro"]
+    },
+    "Heading": {
+      "standard_name": "Heading",
+      "unit": "deg",
+      "aliases": ["GPS Heading", "Orientation"]
+    },
+    "Slope": {
+      "standard_name": "Slope",
+      "unit": "deg",
+      "aliases": ["GPS Slope"]
+    },
+    "GPS Nsat": {
+      "standard_name": "GPS Nsat",
+      "unit": "",
+      "aliases": ["GPS Nsat"]
+    },
+    "GPS PosAccuracy": {
+      "standard_name": "GPS PosAccuracy",
+      "unit": "mm",
+      "aliases": ["GPS PosAccuracy"]
+    },
+    "GPS SpdAccuracy": {
+      "standard_name": "GPS SpdAccuracy",
+      "unit": "km/h",
+      "aliases": ["GPS SpdAccuracy"]
+    },
+    "GPS Radius": {
+      "standard_name": "GPS Radius",
+      "unit": "m",
+      "aliases": ["GPS Radius"]
+    },
+    "Accel Sum": {
+      "standard_name": "Accel Sum",
+      "unit": "g",
+      "aliases": ["G sum smth"]
+    },
+    "Temperature": {
+      "standard_name": "Temperature",
+      "unit": "°C",
+      "aliases": ["Logger Temperature", "T1", "T2"]
+    },
+    "Battery Voltage": {
+      "standard_name": "Battery Voltage",
+      "unit": "V",
+      "aliases": ["Int Batt Voltage"]
+    },
+    "Distance": {
+      "standard_name": "Distance",
+      "unit": "m",
+      "aliases": ["Distance on GPS Speed", "Distance"]
+    },
+    "Lap Number": {
+      "standard_name": "Lap Number",
+      "unit": "",
+      "aliases": ["Partiel"]
+    }
+  }
+}
