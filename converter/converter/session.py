@@ -1,19 +1,24 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import math
 import json
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Iterable
+from bisect import bisect_right
+from typing import Iterable, Sequence
 
+import numpy as np
 import pandas as pd
+from pyproj import Transformer
 
 
 ROOT = Path(__file__).resolve().parent
 MOTEC = ROOT / "motec_log_generator.py"
 THIRD_MOTEC = ROOT.parent / "third_party" / "MotecLogGenerator" / "motec_log_generator.py"
+WGS84_TO_WEBMERC = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True)
 
 
 def motec_script() -> Path:
@@ -112,6 +117,135 @@ class Session:
         if not keep_csv:
             csv_path.unlink(missing_ok=True)
         return output
+
+    def estimate_laps(
+        self,
+        start_finish_line: Sequence[tuple[float, float]],
+        *,
+        distance_threshold: float = 20.0,
+        min_lap_time: float = 30.0,
+    ) -> None:
+        """
+        Estimate lap numbers and lap-relative timers using a start/finish line.
+
+        Args:
+            start_finish_line: Iterable of (lon, lat) points describing the start/finish line.
+            distance_threshold: Maximum lateral distance (meters) from the line to treat a sample as crossing.
+            min_lap_time: Minimum seconds between valid crossings to avoid false positives.
+        """
+        if not start_finish_line or len(start_finish_line) < 2:
+            return
+        if "Time" not in self.table.columns:
+            return
+
+        lat_col = next((c for c in ("GPS Latitude", "Latitude", "Lat.") if c in self.table.columns), None)
+        lon_col = next((c for c in ("GPS Longitude", "Longitude", "Lon.") if c in self.table.columns), None)
+        if not lat_col or not lon_col:
+            return
+
+        time_series = pd.to_numeric(self.table["Time"], errors="coerce")
+        lat_series = pd.to_numeric(self.table[lat_col], errors="coerce")
+        lon_series = pd.to_numeric(self.table[lon_col], errors="coerce")
+        valid_mask = ~(time_series.isna() | lat_series.isna() | lon_series.isna())
+        if valid_mask.sum() < 2:
+            return
+
+        lon_vals = lon_series[valid_mask].to_numpy()
+        lat_vals = lat_series[valid_mask].to_numpy()
+        x_vals, y_vals = WGS84_TO_WEBMERC.transform(lon_vals, lat_vals)
+
+        line_lon, line_lat = zip(*start_finish_line)
+        line_x, line_y = WGS84_TO_WEBMERC.transform(np.array(line_lon), np.array(line_lat))
+        start_vec = np.array([line_x[0], line_y[0]])
+        end_vec = np.array([line_x[-1], line_y[-1]])
+        line_vec = end_vec - start_vec
+        line_len = float(np.hypot(line_vec[0], line_vec[1]))
+        if line_len < 1e-3:
+            return
+
+        relative = np.column_stack([x_vals - start_vec[0], y_vals - start_vec[1]])
+        cross_vals = relative[:, 0] * line_vec[1] - relative[:, 1] * line_vec[0]
+        dist_to_line = cross_vals / line_len
+        near_line = np.abs(dist_to_line) <= distance_threshold
+
+        valid_indices = np.nonzero(valid_mask.to_numpy())[0]
+        time_values = time_series.to_numpy(dtype=float, copy=True)
+        start_time = float(time_series[valid_mask].iloc[0])
+        if not math.isfinite(start_time):
+            start_time = 0.0
+
+        crossings: list[float] = []
+        last_cross = None
+        for idx in range(1, len(valid_indices)):
+            if not (near_line[idx - 1] or near_line[idx]):
+                continue
+            c0 = cross_vals[idx - 1]
+            c1 = cross_vals[idx]
+            if math.copysign(1.0, c0) == math.copysign(1.0, c1):
+                continue
+            i0 = valid_indices[idx - 1]
+            i1 = valid_indices[idx]
+            t0 = time_values[i0]
+            t1 = time_values[i1]
+            if not (math.isfinite(t0) and math.isfinite(t1)):
+                continue
+            if c0 == c1:
+                continue
+            cross_time = t0 + (c0 / (c0 - c1)) * (t1 - t0)
+            if last_cross is not None and cross_time - last_cross < min_lap_time:
+                continue
+            crossings.append(cross_time)
+            last_cross = cross_time
+
+        lap_numbers = np.full(len(time_values), np.nan)
+        lap_elapsed = np.full(len(time_values), np.nan)
+        lap_durations: list[float] = []
+
+        if not crossings:
+            for i, t in enumerate(time_values):
+                if not math.isfinite(t):
+                    continue
+                lap_numbers[i] = 0
+                lap_elapsed[i] = max(0.0, t - start_time)
+        elif len(crossings) == 1:
+            boundary = crossings[0]
+            for i, t in enumerate(time_values):
+                if not math.isfinite(t):
+                    continue
+                if t < boundary:
+                    lap_numbers[i] = 0
+                    lap_elapsed[i] = max(0.0, t - start_time)
+                else:
+                    lap_numbers[i] = 1
+                    lap_elapsed[i] = max(0.0, t - boundary)
+        else:
+            lap_starts = crossings[:-1]
+            last_boundary = crossings[-1]
+            lap_durations = [end - start for start, end in zip(lap_starts, crossings[1:])]
+            for i, t in enumerate(time_values):
+                if not math.isfinite(t):
+                    continue
+                if t < lap_starts[0]:
+                    lap_numbers[i] = 0
+                    lap_elapsed[i] = max(0.0, t - start_time)
+                    continue
+                if t >= last_boundary:
+                    lap_numbers[i] = -1
+                    lap_elapsed[i] = max(0.0, t - last_boundary)
+                    continue
+                pos = bisect_right(lap_starts, t) - 1
+                pos = max(pos, 0)
+                lap_numbers[i] = pos + 1
+                lap_elapsed[i] = max(0.0, t - lap_starts[pos])
+
+        lap_series = pd.Series(lap_numbers, index=self.table.index).round().astype("Int64")
+        self.table["LapNumber"] = lap_series
+        self.table["LapTime"] = lap_elapsed
+        if lap_durations:
+            self.tags["lap_info"] = {
+                "crossings": crossings,
+                "lap_durations": lap_durations,
+            }
 
 
 class ChannelNormalizer:

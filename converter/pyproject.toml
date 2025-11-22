@@ -8,4 +8,8 @@ dependencies = [
     "cantools>=40.7.1",
     "numpy>=2.3.4",
     "pandas>=2.3.3",
+    "pillow>=11.0.0",
+    "pyproj>=3.6.1",
+    "pyshp>=2.3.1",
+    "tqdm>=4.66.0",
 ]
