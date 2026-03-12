@@ -1,6 +1,6 @@
 [submodule "converter/third_party/MotecLogGenerator"]
-	path = converter/third_party/MotecLogGenerator
+	path = racing_tools/third_party/MotecLogGenerator
 	url = git@github.com:kharitonov-ivan/MotecLogGenerator.git
-
 [submodule "converter/third_party/xrk"]
-	path = converter/third_party/xrk
+	path = racing_tools/third_party/xrk
+	url = https://github.com/laz-/xrk.git
