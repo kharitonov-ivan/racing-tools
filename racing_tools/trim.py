@@ -155,11 +155,8 @@ def get_crossings_info(video_path: Path, start_time: float = 0.0, no_interactive
     if info.exists:
         print(f"Found saved crossing times: {len(info.times)} laps at {info.times}")
         if not no_interactive:
-            try:
-                if input("Regenerate lap markings? [y/N]: ").strip().lower() == "y":
-                    info.exists = False  # Force regeneration
-            except (EOFError, KeyboardInterrupt):
-                pass  # Non-interactive, keep saved data
+            if input("Regenerate lap markings? [y/N]: ").strip().lower() == "y":
+                info.exists = False  # Force regeneration
     
     if not info.exists and not no_interactive:
         times = run_manual_lap_marking(video_path, start_time=start_time)
@@ -188,8 +185,8 @@ def get_trim_info(video_path, no_interactive):
             try:
                 if input("Run interactive selection? [y/N]: ").strip().lower() == 'y':
                     should_interact = True
-            except (EOFError, KeyboardInterrupt):
-                pass  # Non-interactive, use saved data
+            except KeyboardInterrupt:
+                sys.exit(0)
     else:
         # No info
         if no_interactive:
