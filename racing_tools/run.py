@@ -27,9 +27,9 @@ from racing_tools.overlay import (
     format_duration,
     get_gradient_color,
 )
-from racing_tools.session.session import DISTANCE_AIM, SPEED_AIM, Session, VideoSession, ensure_distance
+from racing_tools.session.session import DISTANCE_AIM, SPEED_AIM, PiecewiseSync, Session, VideoSession, ensure_distance
 from racing_tools.session.video_info import VideoInfo, probe_video
-from racing_tools.sync_ui import run_interactive_sync, run_manual_lap_marking
+from racing_tools.sync_ui import run_manual_lap_marking
 from racing_tools.track.models import WGS84_TO_WEBMERC, Track
 from racing_tools.trim import (
     VideoSidecar,  # Manual lap marking mode - use VideoSidecar for persistence
@@ -222,11 +222,15 @@ def build_lap_stats_ov(pipe: Pipeline, session: "VideoSession") -> Pipeline:
     
     # Always show lap id and time first
     columns.append(("Lap", "id", 60))
-    columns.append(("Time", "time", 120))
-    
+    columns.append(("Video", "time", 120))
+
+    # Add GPS time column if available
+    if sample.get("gps_time") is not None:
+        columns.append(("GPS", "gps_time", 120))
+
     # Add any other numeric columns that have data
     for key, value in sample.items():
-        if key in ("id", "time"):
+        if key in ("id", "time", "gps_time"):
             continue
         if value is not None:
             columns.append((key.replace("_", " ").title(), key, 100))
@@ -299,8 +303,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 # Format based on key type
                 if key == "id":
                     text = f"{value}*" if value == best_lap_id else str(value)
-                elif key == "time":
-                    text = format_duration(value, decimals=3)
+                elif key in ("time", "gps_time"):
+                    text = format_duration(value, decimals=3) if value else "-"
                 elif value is None:
                     text = "-"
                 elif isinstance(value, float):
@@ -400,6 +404,7 @@ PlayResY: {height}
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Gauge,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&H60000000,1,0,0,0,100,100,0,0,3,0,0,2,10,10,50,1
 Style: Delta,Arial,40,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,0,0,8,10,10,20,1
+Style: LapTimer,Arial,36,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,0,0,1,10,10,100,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -489,12 +494,21 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
         total_frames = len(session_table)
 
+        # Precompute crossings for lap elapsed time
+        display_crossings: list[float] = getattr(session, "crossings", []) or []
+
         def fmt_time(t):
             h = int(t / 3600)
             m = int((t % 3600) / 60)
             s = int(t % 60)
             cs = int((t * 100) % 100)
             return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
+
+        def fmt_lap_time(t: float) -> str:
+            """Format elapsed lap time as M:SS.mmm."""
+            m = int(t / 60)
+            s = t - m * 60
+            return f"{m}:{s:06.3f}"
 
         # Generate per-frame events
         for i in range(total_frames):
@@ -524,6 +538,20 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             text = f"{{\\c&H00FFFFFF&}}{int(speed):3d} km/h   {{\\c{rpm_color}&}}{bar_text}   {int(rpm):5d} RPM"
 
             f.write(f"Dialogue: 0,{s_str},{e_str},Gauge,,0,0,0,,{text}\n")
+
+            # Lap timer + frame number
+            video_t = t_start
+            lap_elapsed = video_t
+            if display_crossings:
+                last_crossing = 0.0
+                for cx in display_crossings:
+                    if cx <= video_t:
+                        last_crossing = cx
+                    else:
+                        break
+                lap_elapsed = video_t - last_crossing
+            timer_text = f"Lap {fmt_lap_time(lap_elapsed)}  |  Frame {i}"
+            f.write(f"Dialogue: 0,{s_str},{e_str},LapTimer,,0,0,0,,{timer_text}\n")
 
             # Delta Overlay
             if has_delta:
@@ -593,26 +621,17 @@ def calculate_segment_stats(session_table, lap_id, raw_segments):
     """
     stats = {}
 
-    if "Distance" not in session_table.columns or "Speed" not in session_table.columns:
+    speed_col = next((c for c in ("GPS Speed", "Speed", "Wheel Speed") if c in session_table.columns), None)
+    if "Distance" not in session_table.columns or speed_col is None:
         print("[stats] Missing Distance or Speed columns.")
         return stats
 
-    # Filter for lap
     lap_data = session_table[session_table["LapNumber"] == lap_id]
     if lap_data.empty:
         print(f"[stats] No data for lap {lap_id}")
         return stats
 
-    # Calculate cumulative distance for segments to map data
     current_dist = 0.0
-    # Find lap start distance (Distance is cumulative in session)
-    # The 'Distance' column in session usually resets or is absolute?
-    # In 'calculate_laps', Distance is raw total distance.
-    # The lap start/finish logic slices it.
-    # lap_data["Distance"] should be monotonically increasing within the lap.
-    # But does the track geometry (segments) aligned with the lap start?
-    # Usually yes, if derived from same "centerline".
-
     lap_start_dist = lap_data["Distance"].min()
     print(f"[stats] Lap {lap_id} Start Dist: {lap_start_dist:.2f}")
 
@@ -645,12 +664,10 @@ def calculate_segment_stats(session_table, lap_id, raw_segments):
         seg_samples = lap_data[mask]
 
         if not seg_samples.empty:
-            speed = seg_samples["Speed"]
-            s_min, s_max = speed.min(), speed.max()
+            spd = seg_samples[speed_col]
+            s_min, s_max = spd.min(), spd.max()
             stats[idx] = (s_min, s_max)
-            # print(f"[stats] Seg {idx} ({start_d:.1f}-{end_d:.1f}): {s_min:.0f}/{s_max:.0f}")
         else:
-            # print(f"[stats] Seg {idx} ({start_d:.1f}-{end_d:.1f}): No samples")
             pass
 
     print(f"[stats] Calculated stats for {len(stats)}/{len(raw_segments)} segments.")
@@ -714,15 +731,16 @@ def calculate_sector_stats_for_lap(session_table, lap_id, sectors):
     """
     stats = {}
     
-    if "Distance" not in session_table.columns or "Speed" not in session_table.columns:
+    speed_col = next((c for c in ("GPS Speed", "Speed", "Wheel Speed") if c in session_table.columns), None)
+    if "Distance" not in session_table.columns or speed_col is None:
         print(f"[sector-stats] Missing Distance or Speed columns")
         return stats
-    
+
     lap_data = session_table[session_table["LapNumber"] == lap_id]
     if lap_data.empty:
         print(f"[sector-stats] No data for lap {lap_id}")
         return stats
-    
+
     lap_start_dist = lap_data["Distance"].min()
     
     # Calculate cumulative distance for each segment from points
@@ -763,11 +781,11 @@ def calculate_sector_stats_for_lap(session_table, lap_id, sectors):
         seg_samples = lap_data[mask]
         
         if not seg_samples.empty:
-            speed = seg_samples["Speed"]
-            stats[idx] = (speed.min(), speed.max())
-            if idx < 3:  # Debug first 3 sectors
+            spd = seg_samples[speed_col]
+            stats[idx] = (spd.min(), spd.max())
+            if idx < 3:
                 print(f"[sector-stats] Sector {idx}: dist {start_d:.0f}-{end_d:.0f}m, "
-                      f"matched {len(seg_samples)} samples, speed {speed.min():.0f}-{speed.max():.0f}")
+                      f"matched {len(seg_samples)} samples, speed {spd.min():.0f}-{spd.max():.0f}")
         else:
             if idx < 3:
                 print(f"[sector-stats] Sector {idx}: dist {start_d:.0f}-{end_d:.0f}m, NO SAMPLES")
@@ -1109,6 +1127,7 @@ def build_writer(pipe: Pipeline, output_path, vcodec=None, preset=None, crf=None
         # NVENC uses -cq for quality (like CRF) and requires -rc vbr
         if preset:
             kwargs["preset"] = preset
+        kwargs["tune"] = "hq"
 
         if crf is not None:
             kwargs["cq"] = crf
@@ -1148,62 +1167,32 @@ def build_writer(pipe: Pipeline, output_path, vcodec=None, preset=None, crf=None
 def export_best_lap(
     output_video: str | Path,
     video_session: "VideoSession",
-    session: Session,
     video_duration: float,
     trim_start: float = 0.0,
-    sync_offset: float = 0.0,
     buffer_seconds: float = 3.0,
 ) -> None:
     """
     Export the best lap from the output video as a separate file.
-    
-    Args:
-        output_video: Path to the rendered output video.
-        video_session: VideoSession with best_lap property.
-        session: Session with crossings data.
-        video_duration: Total video duration in seconds.
-        trim_start: Trim offset applied to the video.
-        sync_offset: Telemetry sync offset (telemetry_time = video_time + sync_offset).
-        buffer_seconds: Seconds to add before/after lap (default: 3.0).
+
+    Uses video_session.crossings which are already in display time (video - trim).
     """
     best_lap = video_session.best_lap
     if not best_lap:
         print("[Best Lap Export] No valid best lap found.")
         return
-    
+
     best_lap_id = best_lap["id"]
     print(f"\n[Best Lap Export] Exporting Lap {best_lap_id} ({best_lap['time']:.3f}s)...")
-    
-    # Get crossing times for the best lap (these are in TELEMETRY time)
-    # Lap N starts at crossings[N-1] and ends at crossings[N]
-    crossings = getattr(session, 'crossings', []) or []
-    
-    print(f"[Best Lap Export] Debug: crossings count={len(crossings)}, best_lap_id={best_lap_id}")
-    print(f"[Best Lap Export] Debug: trim_start={trim_start:.2f}, sync_offset={sync_offset:.2f}")
-    
+
+    # Crossings are already in display time (video time minus trim)
+    crossings = getattr(video_session, 'crossings', []) or []
+
     if not crossings or best_lap_id < 1 or best_lap_id > len(crossings):
         print(f"[Best Lap Export] Could not determine crossing times for Lap {best_lap_id}")
-        print(f"[Best Lap Export]   crossings={crossings[:5]}..." if len(crossings) > 5 else f"[Best Lap Export]   crossings={crossings}")
         return
-    
-    # Crossings are in TELEMETRY time
-    # Convert to VIDEO time: video_time = telemetry_time - sync_offset
-    # Then to OUTPUT video time: output_time = video_time - trim_start
-    
-    t_start_telemetry = crossings[best_lap_id - 1]
-    t_end_telemetry = crossings[best_lap_id] if best_lap_id < len(crossings) else crossings[-1] + best_lap['time']
-    
-    print(f"[Best Lap Export] Debug: telemetry times: start={t_start_telemetry:.2f}, end={t_end_telemetry:.2f}")
-    
-    # Convert to original video time
-    t_start_video = t_start_telemetry - sync_offset
-    t_end_video = t_end_telemetry - sync_offset
-    
-    print(f"[Best Lap Export] Debug: video times: start={t_start_video:.2f}, end={t_end_video:.2f}")
-    
-    # Convert to OUTPUT video time (relative to trimmed video start)
-    clip_start = t_start_video - trim_start - buffer_seconds
-    clip_end = t_end_video - trim_start + buffer_seconds
+
+    clip_start = crossings[best_lap_id - 1] - buffer_seconds
+    clip_end = (crossings[best_lap_id] if best_lap_id < len(crossings) else crossings[-1] + best_lap['time']) + buffer_seconds
     
     # Clamp to valid range (output video is from 0 to output_duration)
     output_duration = video_duration - trim_start
@@ -1300,7 +1289,7 @@ def main() -> int:
             args.vcodec = "av1_nvenc"
             hwaccel = "cuda"
             # NVENC AV1 uses p1-p7 presets (p7=slowest/best)
-            if args.preset == "4":  # If user didn't change default
+            if args.preset == "7":  # If user didn't change default
                 args.preset = "p7"
             print(f"CUDA detected: Using {args.vcodec} with hwaccel={hwaccel}")
         else:
@@ -1322,67 +1311,86 @@ def main() -> int:
     if args.track_dir:
         track = Track.load(args.track_dir)
 
+    # --- Step 1: Always get video crossings via manual lap marking ---
+    crossings_sidecar = VideoSidecar.load(Path(args.inp), "crossings")
+    if crossings_sidecar.exists:
+        print(f"[Crossings] Found saved video crossings: {len(crossings_sidecar.get('times', []))} laps")
+        if not args.no_interactive:
+            if input("Regenerate lap markings? [y/N]: ").strip().lower() == "y":
+                crossings_sidecar.exists = False
+
+    if not crossings_sidecar.exists and not args.no_interactive:
+        times = run_manual_lap_marking(args.inp, start_time=trim_info.start if trim_info else 0.0)
+        if times:
+            crossings_sidecar.save({"times": times})
+
+    crossings_video: list[float] = crossings_sidecar.get("times", [])
+
+    # --- Step 2: Load telemetry (if any) and build piecewise sync ---
+    sync_mapping: PiecewiseSync | None = None
+
     if args.telemetry:
         session = Session.load(args.telemetry)
         if track:
             session.track = track.geometry
+            session.detect_crossings()
+
+        # Fallback: infer crossings from Lap column transitions
+        if not session.crossings and "Lap" in session.table.columns:
+            import pandas as pd
+            laps = pd.to_numeric(session.table["Lap"], errors="coerce").ffill().fillna(1)
+            t_vals = session.table["Time"].values
+            inferred = [float(t_vals[i]) for i in range(1, len(laps)) if laps.iloc[i] != laps.iloc[i - 1]]
+            if inferred:
+                session.crossings = inferred
+                print(f"[Crossings] Inferred {len(inferred)} crossings from Lap column")
+
+        session.add_lap_numbers()
+        crossings_telem: list[float] = session.crossings or []
+
+        # Export to MoTeC .ld format
+        motec_output = Path(args.telemetry).with_suffix(".ld")
+        session.to_motec(output=motec_output, frequency=10.0)
+        print(f"[MoTeC] Exported to {motec_output}")
+
+        # Build piecewise sync from matched crossing pairs
+        n_pairs = min(len(crossings_video), len(crossings_telem))
+        if n_pairs >= 1:
+            anchors = list(zip(crossings_video[:n_pairs], crossings_telem[:n_pairs]))
+            sync_mapping = PiecewiseSync(anchors=anchors)
+            print(f"[Sync] Built piecewise mapping with {n_pairs} anchor points:")
+            for i, (v, t) in enumerate(anchors):
+                print(f"  Crossing {i+1}: video={v:.3f}s <-> telem={t:.3f}s (offset={t-v:.3f}s)")
+            if len(crossings_video) != len(crossings_telem):
+                print(f"[Sync] Warning: crossing count mismatch — video={len(crossings_video)}, telem={len(crossings_telem)}")
         else:
-            raise NotImplementedError("TODO: implement track geometry from session")
-        session.detect_crossings()
-        session.add_lap_numbers()
-
+            print("[Sync] Warning: no matching crossings, using offset=0")
+            sync_mapping = PiecewiseSync.from_offset(0.0)
     else:
-        crossings_sidecar = VideoSidecar.load(Path(args.inp), "crossings")
-        if crossings_sidecar.exists:
-            if input(f"Found saved crossing times: {crossings_sidecar.get('times')} Regenerate lap markings? [y/N]: ").strip().lower() == "y":
-                crossings_sidecar.exists = False
-
-        if not crossings_sidecar.exists:
-            times = run_manual_lap_marking(args.inp, start_time=trim_info.start if trim_info else 0.0)
-            if times:
-                crossings_sidecar.save({"times": times})
-
-        crossing_times = crossings_sidecar.get("times", [])
-        session = create_session_from_crossings(video_info, crossing_times)
-        session.crossings = crossing_times
+        # No telemetry — create session from video crossings
+        session = create_session_from_crossings(video_info, crossings_video)
+        session.crossings = crossings_video
         session.add_lap_numbers()
 
+    # --- Step 3: Build video session and resample ---
     video_session = VideoSession.from_session(session, Path(args.inp))
-    offset = 0.0
-    sync = VideoSidecar.load(Path(args.inp), "sync")
-    if sync.exists and args.telemetry:
-        if input(f"Found saved sync offset: {sync.get('offset')}. Regenerate? [y/N]: ").strip().lower() == "y":
-            sync.exists = False
+    trim_start_time = trim_info.start if trim_info else 0.0
 
-    if not sync.exists and args.telemetry:
-        offset = run_interactive_sync(args.inp, session.crossings, fps=video_info.fps, duration=video_info.duration)
-        sync.save({"offset": offset})
-    
-    if args.telemetry:
-        offset = sync.get("offset", 0.0)
-        trim_start_time = trim_info.start if trim_info else 0.0
+    if args.telemetry and sync_mapping is not None:
         video_session.table = video_session.resample_to_video(
             fps=video_info.fps,
             trim_start=trim_start_time,
             duration=((trim_info.end - trim_info.start) if trim_info and trim_info.end else video_info.duration),
-            sync_offset=offset,
+            sync=sync_mapping,
         )
-        
-        # Convert crossings from telemetry time to video time
-        # Formula: video_time = telemetry_time - sync_offset - trim_start
-        if video_session.crossings:
-            video_session.crossings = [
-                max(0.0, c - offset - trim_start_time) for c in video_session.crossings
-            ]
-            print(f"[Crossings] Converted to video time (offset={offset:.2f}, trim={trim_start_time:.2f}): {video_session.crossings[:3]}...")
-    else:
-        # No telemetry mode - still need to adjust crossings for trim
-        if trim_info and video_session.crossings:
-            trim_start_time = trim_info.start
-            video_session.crossings = [
-                max(0.0, c - trim_start_time) for c in video_session.crossings
-            ]
-            print(f"[Crossings] Adjusted for trim (trim_start={trim_start_time:.2f}): {video_session.crossings[:3]}...")
+
+    # Use video crossings (adjusted for trim) as display crossings
+    if crossings_video:
+        video_session.crossings = [max(0.0, c - trim_start_time) for c in crossings_video]
+        print(f"[Crossings] Display crossings (trim={trim_start_time:.2f}): {video_session.crossings[:3]}...")
+    # Store GPS crossings for comparison in lap table
+    if args.telemetry and sync_mapping is not None:
+        video_session.crossings_gps = crossings_telem
 
     pipeline = build_opener(Path(args.inp), hwaccel=hwaccel)
 
@@ -1468,10 +1476,8 @@ def main() -> int:
         export_best_lap(
             output_video=args.out,
             video_session=video_session,
-            session=session,
             video_duration=video_info.duration,
             trim_start=trim_info.start if trim_info else 0.0,
-            sync_offset=offset if args.telemetry else 0.0,
         )
     
     return 0

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import atexit
 from dataclasses import dataclass, field
 import math
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
+import zipfile
 from pathlib import Path
 from bisect import bisect_right
 from typing import Iterable, Sequence
@@ -16,6 +19,51 @@ import re
 import csv
 from datetime import datetime
 from pyproj import Transformer
+
+
+@dataclass
+class PiecewiseSync:
+    """Piecewise linear mapping between video time and telemetry time.
+
+    anchors: list of (video_time, telemetry_time) pairs, sorted by video_time.
+    With 1 pair acts as constant offset. Uses np.interp for interpolation
+    and linear extrapolation beyond edges.
+    """
+    anchors: list[tuple[float, float]]  # shape: (N, 2)
+
+    def __post_init__(self) -> None:
+        self.anchors.sort(key=lambda a: a[0])
+        self._v = np.array([a[0] for a in self.anchors])
+        self._t = np.array([a[1] for a in self.anchors])
+
+    def video_to_telemetry(self, video_time: np.ndarray | float) -> np.ndarray:
+        """Map video time(s) to telemetry time via piecewise linear interp."""
+        return np.interp(video_time, self._v, self._t)
+
+    def telemetry_to_video(self, telem_time: np.ndarray | float) -> np.ndarray:
+        """Map telemetry time(s) to video time (inverse mapping)."""
+        return np.interp(telem_time, self._t, self._v)
+
+    @classmethod
+    def from_offset(cls, offset: float) -> "PiecewiseSync":
+        """Create from a single constant offset (telemetry_time = video_time + offset)."""
+        return cls(anchors=[(0.0, offset), (1e6, 1e6 + offset)])
+
+    def to_dict(self) -> dict:
+        return {
+            "type": "piecewise",
+            "anchors_video": self._v.tolist(),
+            "anchors_telem": self._t.tolist(),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "PiecewiseSync":
+        """Load from sidecar dict. Supports legacy {offset: float} format."""
+        if data.get("type") == "piecewise":
+            return cls(anchors=list(zip(data["anchors_video"], data["anchors_telem"])))
+        # Legacy single-offset format
+        offset = data.get("offset", 0.0)
+        return cls.from_offset(offset)
 
 
 ROOT = Path(__file__).resolve().parent
@@ -43,6 +91,24 @@ SPEED_ALFANO = ["Speed GPS", "GPS Speed", "Speed rear", "Wheel Speed"]
 DISTANCE_EXCEL = ["Distance"]
 SPEED_EXCEL = ["Speed GPS", "Speed rear", "Wheel Speed"]
 ALFANO_STEP = 0.1
+_LAP_NUM_RE = re.compile(r"LAP_(\d+)_")
+
+
+def _extract_lap_number(filename: str) -> int:
+    """Extract lap number from LAP_N_... filename for natural sorting."""
+    m = _LAP_NUM_RE.search(filename)
+    return int(m.group(1)) if m else 0
+
+
+def _detect_alfano_device(files: list[Path]) -> str:
+    """Detect Alfano device type (Alfano6/Alfano7) from file names."""
+    for f in files:
+        upper = f.name.upper()
+        if "ALFANO7" in upper:
+            return "Alfano7"
+        if "ALFANO6" in upper:
+            return "Alfano6"
+    return "Alfano"
 DATE_TOKEN = re.compile(r"\d{6}")
 TIME_TOKEN = re.compile(r"\d{2}H\d{2}")
 
@@ -243,6 +309,7 @@ class Session:
     # Lap analysis
     track: "TrackGeometry | None" = None
     crossings: list[float] = field(default_factory=list)
+    crossings_gps: list[float] = field(default_factory=list)
 
     # Backward compatibility properties
     @property
@@ -396,24 +463,36 @@ class Session:
             durations[i] = self.crossings[i] - self.crossings[i-1]
         return durations
 
+    def _get_gps_lap_durations(self) -> dict[int, float]:
+        """Calculate lap durations from GPS crossings (telemetry time)."""
+        if not self.crossings_gps:
+            return {}
+        durations: dict[int, float] = {}
+        for i in range(1, len(self.crossings_gps)):
+            durations[i] = self.crossings_gps[i] - self.crossings_gps[i - 1]
+        return durations
+
     def get_lap_stats(self) -> list[dict]:
-        """Calculate statistics for each lap. Returns list of dicts with id, time, speed/rpm stats."""
+        """Calculate statistics for each lap. Returns list of dicts with id, time, gps_time, speed/rpm stats."""
         if "LapNumber" not in self.table.columns:
             return []
-        
+
         lap_durations = self.get_lap_durations()
+        gps_durations = self._get_gps_lap_durations()
         speed_col = self._pick_column(["GPS Speed", "Speed", "Vitesse"])
         rpm_col = self._pick_column(["RPM", "Régime"])
-        
+
         stats = []
         for lap_id in sorted(self.table["LapNumber"].unique()):
             lap_data = self.table[self.table["LapNumber"] == lap_id]
             if lap_data.empty:
                 continue
-            
+
             lap_time = lap_durations.get(int(lap_id), lap_data["LapTime"].max() if "LapTime" in lap_data.columns else 0.0)
-            
-            stat = {"id": int(lap_id), "time": lap_time, "min_speed": None, "max_speed": None, "min_rpm": None, "max_rpm": None}
+            gps_time = gps_durations.get(int(lap_id))
+
+            stat: dict = {"id": int(lap_id), "time": lap_time, "gps_time": gps_time,
+                          "min_speed": None, "max_speed": None, "min_rpm": None, "max_rpm": None}
             if speed_col:
                 s = pd.to_numeric(lap_data[speed_col], errors="coerce")
                 stat["min_speed"], stat["max_speed"] = s.min(), s.max()
@@ -495,12 +574,46 @@ class Session:
             
         if suffix in (".xrk", ".xrs"):
             return cls.load_aim_raw(path, **kwargs)
+
+        if suffix == ".zip":
+            return cls._load_from_zip(path, **kwargs)
             
         if suffix == ".csv":
-            # Default to AIM CSV for single CSV files for now
+            # Detect Alfano Excel CSVs by filename pattern
+            if path.name.startswith("Excel_"):
+                return cls.load_alfano_csv(path, **kwargs)
             return cls.load_aim_csv(path, **kwargs)
             
         raise ValueError(f"Unsupported file extension: {suffix}")
+
+    @classmethod
+    def _load_from_zip(cls, path: Path, **kwargs) -> "Session":
+        """Extract a ZIP archive to a temp directory and dispatch to the appropriate loader.
+        
+        Supports Alfano ZIP archives containing LAP_*.csv or Excel_*.csv files.
+        """
+        path = Path(path)
+        if not zipfile.is_zipfile(path):
+            raise ValueError(f"{path} is not a valid ZIP file")
+        
+        tmp_dir = Path(tempfile.mkdtemp(prefix="racing_session_"))
+        
+        # Schedule cleanup
+        def cleanup():
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        atexit.register(cleanup)
+        
+        with zipfile.ZipFile(path, "r") as zf:
+            zf.extractall(tmp_dir)
+        
+        # Check contents and dispatch
+        if list(tmp_dir.glob("LAP_*.csv")):
+            return cls.load_alfano_raw(tmp_dir, **kwargs)
+        if list(tmp_dir.glob("Excel_*.csv")):
+            return cls.load_alfano_csv(tmp_dir, **kwargs)
+        
+        # Fallback: try treating it as a generic folder
+        return cls.load(tmp_dir, **kwargs)
 
     @classmethod
     def load_aim_raw(cls, path: Path, normalize: bool = True) -> "Session":
@@ -720,37 +833,59 @@ class Session:
         folder = Path(folder)
         if not folder.is_dir():
             raise NotADirectoryError(f"{folder} is not a directory")
-            
-        files = sorted(folder.glob("LAP_*.csv"))
-        frames = [pd.read_csv(p) for p in files if p.is_file()]
+
+        files = sorted(
+            folder.glob("LAP_*.csv"),
+            key=lambda p: _extract_lap_number(p.name),
+        )
+        frames: list[pd.DataFrame] = []
+        for lap_idx, p in enumerate(files, start=1):
+            if not p.is_file():
+                continue
+            df = pd.read_csv(p)
+            # Assign lap number from file name order (ignore Partiel column)
+            df["Partiel"] = lap_idx
+            frames.append(df)
         if not frames:
             raise FileNotFoundError(f"No LAP_*.csv files in {folder}")
-            
+
         frame = pd.concat(frames, ignore_index=True)
         frame.insert(0, "Time", np.arange(len(frame)) * ALFANO_STEP)
-        
-        frame = ensure_distance(frame, distance_keys=DISTANCE_ALFANO, speed_keys=SPEED_ALFANO, frequency=1.0 / ALFANO_STEP)
+
         if normalize:
             frame = ChannelNormalizer(device_type="alfano").normalize_dataframe(frame)
+        frame = ensure_distance(frame, distance_keys=DISTANCE_ALFANO, speed_keys=SPEED_ALFANO, frequency=1.0 / ALFANO_STEP)
 
-        session = cls(frame, metadata=SessionMetadata(device="Alfano6"))
-        
+        # Detect device type from file names
+        device = _detect_alfano_device(files)
+        session = cls(frame, metadata=SessionMetadata(device=device))
+
         tokens = name_tokens(folder)
         if len(tokens) > 1:
             session.driver = tokens[-2]
             session.venue = tokens[-1]
-            
+
         date_text, time_text = infer_datetime_from_path(folder)
         session.event_date = date_text
         session.event_time = time_text
         return session
 
     @classmethod
-    def load_alfano_csv(cls, folder: Path, frequency: float = None, normalize: bool = True) -> "Session":
-        """Load Alfano session from Excel export (Excel_*.csv)."""
-        folder = Path(folder)
-        if not folder.is_dir():
-             raise NotADirectoryError(f"{folder} is not a directory")
+    def load_alfano_csv(cls, path_or_folder: Path, frequency: float = None, normalize: bool = True) -> "Session":
+        """Load Alfano session from Excel export (Excel_*.csv).
+        
+        Accepts either a folder containing Excel_*.csv files,
+        or a direct path to an Excel_*.csv file.
+        """
+        path_or_folder = Path(path_or_folder)
+        
+        # Accept a direct CSV file path
+        if path_or_folder.is_file() and path_or_folder.suffix.lower() == ".csv":
+            folder = path_or_folder.parent
+        elif path_or_folder.is_dir():
+            folder = path_or_folder
+        else:
+            raise FileNotFoundError(f"{path_or_folder} is not a file or directory")
 
         files = sorted(folder.glob("Excel_*.csv"))
         if not files:
@@ -764,9 +899,9 @@ class Session:
         if freq is None:
             freq = infer_frequency(frame["Time"])
             
-        frame = ensure_distance(frame, distance_keys=DISTANCE_EXCEL, speed_keys=SPEED_EXCEL, frequency=freq)
         if normalize:
-            frame = ChannelNormalizer().normalize_dataframe(frame)
+            frame = ChannelNormalizer(device_type="alfano").normalize_dataframe(frame)
+        frame = ensure_distance(frame, distance_keys=DISTANCE_EXCEL, speed_keys=SPEED_EXCEL, frequency=freq)
 
         session = cls(frame, metadata=SessionMetadata(device="Alfano6 Excel"))
         
@@ -1204,6 +1339,37 @@ class ChannelNormalizer:
         return (normalized, units) if add_units_row else normalized
 
 
+def _distance_from_gps(frame: pd.DataFrame) -> np.ndarray | None:
+    """Compute cumulative distance from GPS Latitude/Longitude columns (UTM projection)."""
+    lat_col = next((c for c in ("GPS Latitude", "Lat.") if c in frame.columns), None)
+    lon_col = next((c for c in ("GPS Longitude", "Lon.") if c in frame.columns), None)
+    if lat_col is None or lon_col is None:
+        return None
+
+    lat = pd.to_numeric(frame[lat_col], errors="coerce").values
+    lon = pd.to_numeric(frame[lon_col], errors="coerce").values
+    valid = np.isfinite(lat) & np.isfinite(lon) & (lat != 0) & (lon != 0)
+    if valid.sum() < 2:
+        return None
+
+    # Determine UTM zone from median longitude
+    med_lon = np.median(lon[valid])
+    utm_zone = int((med_lon + 180) / 6) + 1
+    hemisphere = "north" if np.median(lat[valid]) >= 0 else "south"
+    epsg = 32600 + utm_zone if hemisphere == "north" else 32700 + utm_zone
+
+    transformer = Transformer.from_crs("EPSG:4326", f"EPSG:{epsg}", always_xy=True)
+    x, y = transformer.transform(lon, lat)
+
+    dx = np.diff(x)
+    dy = np.diff(y)
+    steps = np.sqrt(dx ** 2 + dy ** 2)
+    # Clamp unreasonable jumps (GPS glitches)
+    median_step = np.median(steps[steps > 0]) if np.any(steps > 0) else 1.0
+    steps[steps > median_step * 10] = median_step
+    return np.concatenate([[0.0], np.cumsum(steps)])
+
+
 def ensure_distance(
     frame: pd.DataFrame,
     *,
@@ -1211,11 +1377,19 @@ def ensure_distance(
     speed_keys: Iterable[str],
     frequency: float,
 ) -> pd.DataFrame:
+    # 1. Use existing distance column if present
     for key in distance_keys:
         if key in frame.columns and pd.to_numeric(frame[key], errors="coerce").notna().any():
             frame["Distance"] = pd.to_numeric(frame[key], errors="coerce").ffill().fillna(0.0)
             return frame
 
+    # 2. Compute from GPS coordinates (most accurate for track matching)
+    gps_dist = _distance_from_gps(frame)
+    if gps_dist is not None:
+        frame["Distance"] = gps_dist
+        return frame
+
+    # 3. Fallback: integrate speed over time
     speed_col = next((k for k in speed_keys if k in frame.columns), None)
     if speed_col is None:
         return frame
@@ -1237,7 +1411,7 @@ def name_tokens(path: Path) -> list[str]:
 
 
 # Import here to avoid circular imports
-from session.video_info import probe_video, VideoInfo
+from racing_tools.session.video_info import probe_video, VideoInfo
 from typing import Optional
 
 
@@ -1347,16 +1521,17 @@ class VideoSession(Session):
         self.table["VideoTime"] = video_times
         self.table["Frame"] = (video_times * fps).round().astype(int)
 
-    def resample_to_video(self, fps: float, trim_start: float, duration: float, sync_offset: float) -> pd.DataFrame:
+    def resample_to_video(self, fps: float, trim_start: float, duration: float,
+                           sync: "PiecewiseSync | float" = 0.0) -> pd.DataFrame:
         """
         Resample telemetry to match video frames exactly.
-        
+
         Args:
             fps: Video frames per second.
             trim_start: Start time of the video segment (seconds).
             duration: Duration of the video segment (seconds).
-            sync_offset: Telemetry sync offset (seconds).
-            
+            sync: PiecewiseSync mapping or float offset (legacy).
+
         Returns:
             pd.DataFrame: Resampled telemetry with one row per video frame.
         """
@@ -1364,9 +1539,12 @@ class VideoSession(Session):
         total_frames = int(duration * fps)
         frame_indices = np.arange(total_frames)
         target_video_times = trim_start + (frame_indices / fps)
-        
+
         # 2. Convert to Telemetry Time
-        target_telemetry_times = target_video_times + sync_offset
+        if isinstance(sync, (int, float)):
+            target_telemetry_times = target_video_times + sync
+        else:
+            target_telemetry_times = sync.video_to_telemetry(target_video_times)
         
         # 3. Interpolate
         df = self.table.copy()

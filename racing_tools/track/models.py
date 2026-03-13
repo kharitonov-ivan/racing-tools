@@ -36,8 +36,12 @@ def load_polyline_geojson(path: Path) -> Optional[List[Tuple[float, float]]]:
     gdf = gpd.read_file(path)
     if gdf.empty:
         return None
-    # Get first geometry
-    geom = gdf.geometry.iloc[0]
+    # Find first feature with a non-null geometry
+    geom = None
+    for g in gdf.geometry:
+        if g is not None:
+            geom = g
+            break
     if geom is None:
         return None
     # Handle MultiLineString by taking first part

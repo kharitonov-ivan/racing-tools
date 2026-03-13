@@ -48,10 +48,9 @@ if str(CONVERTER_SRC) not in sys.path:
 
 import racing_tools.stab as stab
 
-from session.session import Session  # type: ignore
-from session.session import VideoSession
-from session.video_info import VideoInfo, probe_video
-from track.models import Track, TrackGeometry, TrackLayout, WGS84_TO_WEBMERC, normalize_angle
+from racing_tools.session.session import Session, VideoSession
+from racing_tools.session.video_info import VideoInfo, probe_video
+from racing_tools.track.models import Track, TrackGeometry, TrackLayout, WGS84_TO_WEBMERC, normalize_angle
 
 
 

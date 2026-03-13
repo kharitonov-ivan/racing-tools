@@ -27,6 +27,11 @@ def run_interactive_sync(video_path, crossings, fps=None, duration=None):
         
     total_frames = int(duration * fps)
     
+    if not crossings:
+        print("Error: No crossings provided for sync.")
+        cap.release()
+        return None
+    
     # State
     current_lap_idx = 0 # Index in crossings list (0 = Lap 1)
     
