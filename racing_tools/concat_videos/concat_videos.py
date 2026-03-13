@@ -3,6 +3,7 @@ import ffmpeg
 import sys
 import re
 import shutil
+import subprocess
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Tuple
@@ -20,6 +21,42 @@ import random
 from racing_tools.session.video_info import probe_video
 
 console = Console()
+
+
+def check_system_dependencies():
+    """Check that required system binaries (tesseract, ffmpeg/ffprobe) are installed."""
+    missing = []
+
+    try:
+        subprocess.run(
+            ["tesseract", "--version"],
+            capture_output=True,
+            check=True,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError):
+        missing.append("tesseract-ocr")
+
+    for binary in ["ffmpeg", "ffprobe"]:
+        try:
+            subprocess.run(
+                [binary, "-version"],
+                capture_output=True,
+                check=True,
+            )
+        except (FileNotFoundError, subprocess.SubprocessError):
+            missing.append(binary)
+
+    if missing:
+        console.print(
+            f"[red bold]Missing system dependencies: {', '.join(missing)}[/red bold]"
+        )
+        console.print(
+            "[yellow]Install them:\n"
+            "  Ubuntu/Debian: sudo apt install tesseract-ocr ffmpeg\n"
+            "  macOS:         brew install tesseract ffmpeg\n"
+            "  Docker:        docker compose run --rm app uv run ...[/yellow]"
+        )
+        sys.exit(1)
 
 
 def extract_frame(file_path: Path, time_offset: float) -> Optional[Image.Image]:
@@ -466,6 +503,8 @@ def export_group(group: List[Dict], output_folder: Path):
 
 
 def main():
+    check_system_dependencies()
+
     parser = argparse.ArgumentParser(description="Concatenate racing videos.")
     parser.add_argument("input_folder", type=Path)
     parser.add_argument("--output", "-o", type=Path)
