@@ -3,101 +3,164 @@
 Batch Transcode Script
 ======================
 
-Transcodes all videos in a folder to AV1 using NVIDIA's hardware encoder (av1_nvenc).
-Requires an NVIDIA RTX 40-series GPU or newer.
+Transcodes all videos in a folder to AV1/HEVC.
 
 Usage:
-    python3 render/transcode_folder.py --input /path/to/videos --output /path/to/output
+    # GPU AV1 (fast, good quality)
+    python racing_tools/transcode_folder.py -i /path/to/videos
+
+    # CPU AV1 (slower, better compression)
+    python racing_tools/transcode_folder.py -i /path/to/videos --codec libsvtav1
+
+    # CPU HEVC (good balance)
+    python racing_tools/transcode_folder.py -i /path/to/videos --codec libx265
+    # No audio (video only)
+    python racing_tools/transcode_folder.py -i /path/to/videos --no-audio
 """
 
 import argparse
+import logging
 import subprocess
 import sys
 from pathlib import Path
 from typing import List
 
-# Try to import tqdm for progress bars, fallback if missing
 try:
     from tqdm import tqdm
 except ImportError:
+
     def tqdm(iterable, **kwargs):
         return iterable
 
+
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi", ".ts", ".m4v"}
 
-def get_video_files(input_dir: Path) -> List[Path]:
-    """Recursively find all video files in the input directory."""
+
+def get_video_files(input_dir: Path, recursive: bool = True) -> List[Path]:
     files = []
+    search_fn = input_dir.rglob if recursive else input_dir.glob
     for ext in VIDEO_EXTENSIONS:
-        files.extend(input_dir.rglob(f"*{ext}"))
-        files.extend(input_dir.rglob(f"*{ext.upper()}"))
+        files.extend(search_fn(f"*{ext}"))
+        files.extend(search_fn(f"*{ext.upper()}"))
     return sorted(list(set(files)))
+
 
 def transcode_file(
     input_path: Path,
     output_path: Path,
     codec: str = "av1_nvenc",
-    cq: int = 15,
+    cq: int = 20,
     preset: str = "p7",
-    overwrite: bool = False
+    overwrite: bool = False,
+    no_audio: bool = False,
 ) -> bool:
     """
     Transcode a single file using ffmpeg.
-    Returns True if successful, False otherwise.
+
+    Quality recommendations:
+    - av1_nvenc: cq=25 (good), cq=20 (excellent), cq=15 (near-lossless)
+    - libsvtav1: cq=30 (good), cq=25 (excellent), cq=20 (near-lossless)
+    - libx265: cq=26 (good), cq=22 (excellent), cq=18 (near-lossless)
     """
     if output_path.exists() and not overwrite:
         print(f"Skipping existing file: {output_path.name}")
         return True
 
-    # Ensure output directory exists
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Adjust flags based on codec
     video_args = ["-c:v", codec]
-    
-    if "nvenc" in codec:
-        video_args.extend([
-            "-preset", preset,
-            "-tune", "hq",
-            "-rc", "vbr",
-            "-cq", str(cq),
-            "-multipass", "2",
-            "-maxrate", "20M",
-            "-bufsize", "40M",
-            "-rc-lookahead", "64",
-            "-spatial_aq", "1",
-            "-temporal_aq", "1",
-            "-aq-strength", "15",
-            "-g", "480",
-            "-bf", "3",
-            "-pix_fmt", "yuv420p"
-        ])
-    elif codec == "libx264" or codec == "libx265":
-        # Map p1-p7 to something reasonable or just ignore if user passed p7
-        # For testing, we'll just use a standard preset if it looks like an nvenc preset
-        use_preset = preset
-        if preset.startswith("p") and preset[1:].isdigit():
-             use_preset = "medium"
-        
-        video_args.extend([
-            "-preset", use_preset,
-            "-crf", str(cq), # Map CQ to CRF roughly
-        ])
+
+    if codec == "av1_nvenc":
+        video_args.extend(
+            [
+                "-preset",
+                preset,
+                "-tune",
+                "hq",
+                "-rc",
+                "vbr",
+                "-cq",
+                str(cq),
+                "-multipass",
+                "qres",
+                "-maxrate",
+                "30M",
+                "-bufsize",
+                "60M",
+                "-rc-lookahead",
+                "60",
+                "-spatial_aq",
+                "1",
+                "-temporal_aq",
+                "1",
+                "-aq-strength",
+                "12",
+                "-g",
+                "300",
+                "-bf",
+                "5",
+                "-pix_fmt",
+                "yuv420p10le",
+            ]
+        )
+    elif codec == "libsvtav1":
+        preset_map = {"p7": "2", "p6": "3", "p5": "4", "p4": "5", "p3": "6", "p2": "7", "p1": "8"}
+        sv_preset = preset_map.get(preset, "4")
+        video_args.extend(
+            [
+                "-preset",
+                sv_preset,
+                "-crf",
+                str(cq),
+                "-svtav1-params",
+                "fast-decode=1:tune=0",
+                "-g",
+                "300",
+                "-pix_fmt",
+                "yuv420p10le",
+            ]
+        )
+    elif codec == "libx265":
+        preset_map = {"p7": "veryslow", "p6": "slower", "p5": "slow", "p4": "medium", "p3": "fast", "p2": "faster", "p1": "veryfast"}
+        x265_preset = preset_map.get(preset, "slow")
+        video_args.extend(
+            [
+                "-preset",
+                x265_preset,
+                "-crf",
+                str(cq),
+                "-x265-params",
+                "aq-mode=3:psy-rd=1.0",
+                "-g",
+                "300",
+                "-pix_fmt",
+                "yuv420p10le",
+            ]
+        )
     else:
-        # Generic fallback
+        print(f"[Warning] Unknown codec '{codec}', using default settings")
         video_args.extend(["-q:v", str(cq)])
+
+    hwaccel_args = ["-hwaccel", "cuda"] if "nvenc" in codec else []
 
     cmd = [
         "ffmpeg",
-        "-hwaccel", "cuda",
+        *hwaccel_args,
         "-y" if overwrite else "-n",
-        "-v", "error",
+        "-v",
+        "error",
         "-stats",
-        "-i", str(input_path),
+        "-i",
+        str(input_path),
         *video_args,
-        "-c:a", "copy",
-        str(output_path)
     ]
+
+    if not no_audio:
+        cmd.extend(["-c:a", "libopus", "-b:a", "192k"])
+    else:
+        cmd.append("-an")
+
+    cmd.append(str(output_path))
 
     try:
         subprocess.run(cmd, check=True)
@@ -109,15 +172,33 @@ def transcode_file(
         print("\nTranscoding interrupted by user.")
         sys.exit(1)
 
+
 def main():
-    parser = argparse.ArgumentParser(description="Batch transcode videos to AV1 (NVIDIA).")
+    parser = argparse.ArgumentParser(description="Batch transcode videos to AV1/HEVC.")
     parser.add_argument("--input", "-i", type=Path, required=True, help="Input folder containing videos.")
     parser.add_argument("--output", "-o", type=Path, help="Output folder. Defaults to 'transcoded' inside input folder.")
-    parser.add_argument("--codec", type=str, default="av1_nvenc", help="Video codec (default: av1_nvenc).")
-    parser.add_argument("--cq", type=int, default=15, help="Constant Quality value (default: 15). Lower = better quality, larger file.")
-    parser.add_argument("--preset", type=str, default="p7", help="NVENC Preset (p1-p7). Default: p7 (best quality).")
+    parser.add_argument(
+        "--codec",
+        type=str,
+        default="av1_nvenc",
+        help="Video codec: av1_nvenc (GPU), libsvtav1 (CPU AV1), libx265 (CPU HEVC). Default: av1_nvenc",
+    )
+    parser.add_argument(
+        "--cq",
+        type=int,
+        default=32,
+        help="Quality. av1_nvenc: 15-35, libsvtav1: 20-35, libx265: 18-26. Lower = better. Default: 32",
+    )
+    parser.add_argument(
+        "--preset",
+        type=str,
+        default="p7",
+        help="NVENC: p1-p7 (p7=best). SVT-AV1: mapped to 2-8. Default: p7",
+    )
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing output files.")
-    
+    parser.add_argument("--no-audio", action="store_true", help="Discard audio stream.")
+    parser.add_argument("--recursive", action="store_true", help="Process files in subdirectories recursively.")
+
     args = parser.parse_args()
 
     input_dir = args.input.expanduser().resolve()
@@ -131,8 +212,8 @@ def main():
         output_dir = input_dir / "transcoded"
 
     print(f"Scanning {input_dir} for videos...")
-    videos = get_video_files(input_dir)
-    
+    videos = get_video_files(input_dir, recursive=args.recursive)
+
     if not videos:
         print("No video files found.")
         return
@@ -143,25 +224,30 @@ def main():
     print("-" * 40)
 
     success_count = 0
-    
-    # Use tqdm if available, otherwise simple loop
     iterator = tqdm(videos, unit="video", desc="Transcoding")
-    
+
     for video_path in iterator:
         rel_path = video_path.relative_to(input_dir)
-        # Use _coded suffix and ensure mp4 extension
-        new_filename = f"{rel_path.stem}_coded.mp4"
+        new_filename = f"{rel_path.stem}_transcoded{rel_path.suffix}"
         out_file = output_dir / rel_path.parent / new_filename
-        
-        # If not using tqdm, print current file
-        if iterator is videos: 
+
+        if iterator is videos:
             print(f"Processing: {video_path.name} -> {out_file.name}")
 
-        if transcode_file(video_path, out_file, codec=args.codec, cq=args.cq, preset=args.preset, overwrite=args.overwrite):
+        if transcode_file(
+            video_path,
+            out_file,
+            codec=args.codec,
+            cq=args.cq,
+            preset=args.preset,
+            overwrite=args.overwrite,
+            no_audio=args.no_audio,
+        ):
             success_count += 1
 
     print("-" * 40)
     print(f"Done. Successfully processed {success_count}/{len(videos)} files.")
+
 
 if __name__ == "__main__":
     main()
