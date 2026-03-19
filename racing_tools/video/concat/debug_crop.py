@@ -1,14 +1,17 @@
+from __future__ import annotations
+
 import sys
 from pathlib import Path
+
 from PIL import Image, ImageDraw
 
 # Add current directory to path
 sys.path.append(str(Path(__file__).parent))
 
-from concat_videos import extract_frame, detect_timestamp_from_image
+from concat import extract_frame, detect_timestamp_from_image
 
 
-def debug_crop(video_path: Path, output_dir: Path):
+def debug_crop(video_path: Path, output_dir: Path) -> None:
     if not video_path.exists():
         print(f"Video not found: {video_path}")
         return
@@ -56,10 +59,23 @@ def debug_crop(video_path: Path, output_dir: Path):
 
 
 if __name__ == "__main__":
-    video_dir = Path(__file__).parent.parent / "VIDEO"
-    # Pick FHD0002 explicitly as we know it works
-    video = video_dir / "FHD0002.MOV"
-    if video.exists():
-        debug_crop(video, Path("debug_crop_output"))
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Debug video crop and OCR")
+    parser.add_argument("video", type=Path, nargs="?", help="Path to video file")
+    parser.add_argument("--output", "-o", type=Path, default=Path("debug_crop_output"), help="Output directory")
+
+    args = parser.parse_args()
+
+    if args.video:
+        video = args.video
     else:
-        print("FHD0002.MOV not found")
+        # Fallback to old path for backwards compatibility
+        video_dir = Path(__file__).parent.parent.parent / "VIDEO"
+        video = video_dir / "FHD0002.MOV"
+
+    if video.exists():
+        debug_crop(video, args.output)
+    else:
+        print(f"Video not found: {video}")
+        sys.exit(1)

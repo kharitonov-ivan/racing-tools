@@ -1,17 +1,19 @@
-import pytest
+from __future__ import annotations
+
 import shutil
-from pathlib import Path
-from datetime import timedelta
+import subprocess
 import sys
+from datetime import timedelta
+from pathlib import Path
 
-# Add current directory to sys.path to allow importing concat_videos
+import pytest
+
+# Add current directory to sys.path
 sys.path.append(str(Path(__file__).parent))
-print("DEBUG: Importing concat_videos...")
 
-from concat_videos import analyze_video, group_videos
+from concat import analyze_video, group_videos
 
 
-# Helper to split video (copied from original test, adapted if needed)
 def split_video(file_path: Path, output_dir: Path) -> list[Path]:
     """
     Splits the first 3 minutes of a video into random chunks (30s +/- 15s).
@@ -37,7 +39,7 @@ def split_video(file_path: Path, output_dir: Path) -> list[Path]:
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
         total_duration = float(result.stdout.strip())
-    except:
+    except (subprocess.CalledProcessError, ValueError):
         return []
 
     # Limit to 3 minutes max for testing
@@ -96,14 +98,11 @@ def split_video(file_path: Path, output_dir: Path) -> list[Path]:
 @pytest.fixture
 def temp_dir():
     """Fixture to create and clean up a temporary directory."""
-    print("DEBUG: Setting up temp_dir fixture")
     path = Path("tests/temp_robustness").resolve()
     if path.exists():
-        print("DEBUG: Removing existing temp_dir")
         shutil.rmtree(path)
     path.mkdir(parents=True)
     (path / "debug").mkdir(exist_ok=True)
-    print("DEBUG: temp_dir created")
     yield path
     # Cleanup after test
     if path.exists():
@@ -111,16 +110,13 @@ def temp_dir():
 
 
 def test_all_videos_robustness(temp_dir):
-    print("DEBUG: Starting test_all_videos_robustness")
-    """
-    Iterates through all videos in render/VIDEO, splits them,
-    and verifies that the algorithm groups them back into a single session.
+    """Test video splitting and grouping algorithm on all videos.
+
+    Iterates through all videos, splits them into random chunks,
+    and verifies that the algorithm groups them back correctly.
     """
     # Locate VIDEO directory relative to this test file
-    # this file is in render/concat_videos/
-    # VIDEO is in render/VIDEO/
     video_dir = Path(__file__).parent.parent / "VIDEO"
-    print(f"DEBUG: video_dir = {video_dir.resolve()}")
 
     video_extensions = {".mp4", ".mov", ".avi", ".mkv", ".MP4", ".MOV"}
     videos = sorted([f for f in video_dir.iterdir() if f.suffix in video_extensions])

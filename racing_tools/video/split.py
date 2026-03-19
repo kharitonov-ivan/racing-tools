@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Video Split Script
+"""Video Split Script.
 
 This script splits a video file into two parts at a specified time point.
 
@@ -18,11 +17,14 @@ Examples:
     python video_split.py video.mp4 125
 """
 
+from __future__ import annotations
+
 import argparse
 import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Optional
 
 
 def parse_time_to_seconds(time_str: str) -> float:
@@ -40,10 +42,11 @@ def parse_time_to_seconds(time_str: str) -> float:
     Returns:
         Time in seconds
     """
+    # Try parsing as raw seconds (e.g., "125" or "90.5")
     try:
-        # Try parsing as float (seconds)
         return float(time_str)
     except ValueError:
+        # Fall through to time format parsing (HH:MM:SS or MM:SS)
         pass
     
     # Parse as time format
@@ -60,7 +63,7 @@ def parse_time_to_seconds(time_str: str) -> float:
         raise ValueError(f"Invalid time format: {time_str}")
 
 
-def get_video_duration(video_path: str) -> float:
+def get_video_duration(video_path: str | Path) -> float:
     """
     Get video duration using ffprobe.
     
@@ -82,7 +85,7 @@ def get_video_duration(video_path: str) -> float:
     return float(result.stdout.strip())
 
 
-def split_video(video_path: str, split_time: float, output_dir: str = None):
+def split_video(video_path: str, split_time: float, output_dir: str | Path | None = None) -> None:
     """
     Split video into two parts at the specified time.
     
@@ -167,7 +170,7 @@ def split_video(video_path: str, split_time: float, output_dir: str = None):
     print(f"\n✓ Video split completed successfully!")
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description='Split a video file into two parts at a specified time',
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -197,15 +200,11 @@ Examples:
     )
     
     args = parser.parse_args()
-    
+
     try:
-        # Parse split time
         split_seconds = parse_time_to_seconds(args.split_time)
-        
-        # Split video
         split_video(args.video_path, split_seconds, args.output_dir)
-        
-    except Exception as e:
+    except (FileNotFoundError, ValueError, subprocess.CalledProcessError) as e:
         print(f"\n❌ Error: {e}", file=sys.stderr)
         sys.exit(1)
 

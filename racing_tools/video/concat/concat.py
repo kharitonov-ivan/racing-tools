@@ -1,14 +1,32 @@
+from __future__ import annotations
+
 import argparse
 import ffmpeg
-import sys
+import random
 import re
 import shutil
 import subprocess
-from pathlib import Path
-from datetime import datetime, timedelta
-from typing import List, Optional, Dict, Tuple
+import sys
 from collections import Counter
-from tqdm import tqdm
+from datetime import datetime, timedelta
+from io import BytesIO
+from pathlib import Path
+from typing import List, Optional, TypedDict
+
+
+class VideoData(TypedDict):
+    """Type annotation for video metadata dictionary.
+
+    Keys:
+        file: Path to video file
+        duration: Video duration in seconds
+        start_time: Optional datetime when video started
+        end_time: Optional datetime when video ended
+    """
+    file: Path
+    duration: float
+    start_time: Optional[datetime]
+    end_time: Optional[datetime]
 
 import pytesseract
 from PIL import Image, ImageOps
@@ -16,11 +34,18 @@ from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from tqdm import tqdm
 
+from racing_tools.session.video_info import probe_video
+
 
 import random
 from racing_tools.session.video_info import probe_video
 
 console = Console()
+
+# Constants
+CONTINUITY_TOLERANCE_SECONDS = 4.0
+BRIDGE_TOLERANCE_SECONDS = 5.0
+DEFAULT_CROP_RATIOS = (0.60, 0.90, 1.0, 1.0)
 
 
 def check_system_dependencies():
@@ -60,16 +85,15 @@ def check_system_dependencies():
 
 
 def extract_frame(file_path: Path, time_offset: float) -> Optional[Image.Image]:
+    """Extract single frame from video at given time offset."""
     try:
         out, _ = (
             ffmpeg.input(str(file_path), ss=time_offset)
             .output("pipe:", vframes=1, format="image2pipe", vcodec="png")
             .run(capture_stdout=True, capture_stderr=True)
         )
-        from io import BytesIO
-
         return Image.open(BytesIO(out))
-    except Exception:
+    except (ffmpeg.Error, OSError, IOError):
         return None
 
 
@@ -172,7 +196,7 @@ def detect_timestamp_from_image(
                 if debug_save_path:
                     processed.save(debug_save_path)
                 return dt
-        except Exception:
+        except (pytesseract.TesseractError, ValueError):
             continue
 
     if debug_save_path:
@@ -294,15 +318,15 @@ def get_video_files(folder: Path) -> List[Path]:
     return sorted([f for f in folder.iterdir() if f.suffix in exts])
 
 
-def analyze_video(file_path: Path, debug_folder: Optional[Path]) -> Dict:
+def analyze_video(file_path: Path, debug_folder: Optional[Path]) -> VideoData:
+    """Analyze video file to extract metadata and timestamp samples."""
     try:
         info = probe_video(file_path)
         duration, fps, nb_frames = info.duration, info.fps, info.nb_frames
-    except Exception:
+    except (FileNotFoundError, KeyError, AttributeError):
         duration, fps, nb_frames = 0.0, 0.0, 0
 
     # Sample timestamps
-    # User requested 50 samples
     samples = sample_timestamps(
         file_path, duration, fps, num_samples=50, debug_folder=debug_folder
     )
@@ -313,90 +337,117 @@ def analyze_video(file_path: Path, debug_folder: Optional[Path]) -> Dict:
     if start_time:
         end_time = start_time + timedelta(seconds=duration)
 
-    return {
-        "file": file_path,
-        "duration": duration,
-        "start_time": start_time,
-        "end_time": end_time,
-    }
+    return VideoData(
+        file=file_path,
+        duration=duration,
+        start_time=start_time,
+        end_time=end_time,
+    )
 
 
-def is_continuous(prev: Dict, curr: Dict) -> bool:
-    # 1. Theoretical continuity: Prev Start + Duration ~= Curr Start
-    if prev["start_time"] and curr["start_time"]:
-        expected = prev["start_time"] + timedelta(seconds=prev["duration"])
-        diff = (curr["start_time"] - expected).total_seconds()
-        if abs(diff) < 4:
-            return True
+def check_theoretical_continuity(prev: VideoData, curr: VideoData) -> bool:
+    """Check if prev start + duration matches curr start."""
+    if not (prev["start_time"] and curr["start_time"]):
+        return False
 
-    # 2. Explicit continuity: Prev End ~= Curr Start
-    if prev["end_time"] and curr["start_time"]:
-        if abs((curr["start_time"] - prev["end_time"]).total_seconds()) < 4:
-            return True
+    expected = prev["start_time"] + timedelta(seconds=prev["duration"])
+    diff = (curr["start_time"] - expected).total_seconds()
+    return abs(diff) < CONTINUITY_TOLERANCE_SECONDS
 
-    # 3. Gap filling: Prev End ~= Curr End - Duration
-    if prev["end_time"] and curr["end_time"]:
-        expected_start = curr["end_time"] - timedelta(seconds=curr["duration"])
-        if abs((expected_start - prev["end_time"]).total_seconds()) < 4:
-            if not curr["start_time"]:
-                curr["start_time"] = expected_start
-            elif abs((curr["start_time"] - expected_start).total_seconds()) > 4:
-                console.print(
-                    f"[yellow]Correcting start time for {curr['file'].name} based on end time[/yellow]"
-                )
-                curr["start_time"] = expected_start
-            return True
 
-    # 4. Date correction (Year/Month/Day)
-    if prev["start_time"] and curr["start_time"]:
-        expected = prev["start_time"] + timedelta(seconds=prev["duration"])
-        try:
-            # Construct corrected time using expected date
-            curr_corrected = curr["start_time"].replace(
-                year=expected.year, month=expected.month, day=expected.day
+def check_explicit_continuity(prev: VideoData, curr: VideoData) -> bool:
+    """Check if prev end matches curr start."""
+    if not (prev["end_time"] and curr["start_time"]):
+        return False
+
+    return abs((curr["start_time"] - prev["end_time"]).total_seconds()) < CONTINUITY_TOLERANCE_SECONDS
+
+
+def check_gap_filling(prev: VideoData, curr: VideoData) -> bool:
+    """Check if curr can fill gap between prev end and curr end."""
+    if not (prev["end_time"] and curr["end_time"]):
+        return False
+
+    expected_start = curr["end_time"] - timedelta(seconds=curr["duration"])
+    if abs((expected_start - prev["end_time"]).total_seconds()) >= CONTINUITY_TOLERANCE_SECONDS:
+        return False
+
+    if not curr["start_time"]:
+        curr["start_time"] = expected_start
+    elif abs((curr["start_time"] - expected_start).total_seconds()) > CONTINUITY_TOLERANCE_SECONDS:
+        console.print(
+            f"[yellow]Correcting start time for {curr['file'].name} based on end time[/yellow]"
+        )
+        curr["start_time"] = expected_start
+    return True
+
+
+def check_date_correction(prev: VideoData, curr: VideoData) -> bool:
+    """Check if curr date can be corrected to match continuity."""
+    if not (prev["start_time"] and curr["start_time"]):
+        return False
+
+    expected = prev["start_time"] + timedelta(seconds=prev["duration"])
+
+    try:
+        # Try correcting date while keeping time
+        curr_corrected = curr["start_time"].replace(
+            year=expected.year, month=expected.month, day=expected.day
+        )
+
+        if abs((curr_corrected - expected).total_seconds()) < CONTINUITY_TOLERANCE_SECONDS:
+            console.print(
+                f"[yellow]Correcting date for {curr['file'].name}: {curr['start_time'].date()} -> {expected.date()}[/yellow]"
             )
+            curr["start_time"] = curr_corrected
+            if curr["end_time"]:
+                curr["end_time"] = curr["end_time"].replace(
+                    year=expected.year, month=expected.month, day=expected.day
+                )
+            return True
 
-            # Check if this corrected time matches expected
-            if abs((curr_corrected - expected).total_seconds()) < 4:
+        # Handle day rollover (e.g. expected 23:59, curr 00:01)
+        for offset in [1, -1]:
+            check_date = expected.date() + timedelta(days=offset)
+            curr_corrected = curr["start_time"].replace(
+                year=check_date.year, month=check_date.month, day=check_date.day
+            )
+            if abs((curr_corrected - expected).total_seconds()) < CONTINUITY_TOLERANCE_SECONDS:
                 console.print(
-                    f"[yellow]Correcting date for {curr['file'].name}: {curr['start_time'].date()} -> {expected.date()}[/yellow]"
+                    f"[yellow]Correcting date (rollover) for {curr['file'].name}: {curr['start_time'].date()} -> {check_date}[/yellow]"
                 )
                 curr["start_time"] = curr_corrected
                 if curr["end_time"]:
-                    # Apply same date correction to end_time
                     curr["end_time"] = curr["end_time"].replace(
-                        year=expected.year, month=expected.month, day=expected.day
+                        year=check_date.year, month=check_date.month, day=check_date.day,
                     )
                 return True
 
-            # Handle day rollover (e.g. expected 23:59, curr 00:01)
-            # If we force expected date, curr becomes 23:59 on WRONG day.
-            # We should try expected date + 1 day and - 1 day.
-            for offset in [1, -1]:
-                check_date = expected.date() + timedelta(days=offset)
-                curr_corrected = curr["start_time"].replace(
-                    year=check_date.year, month=check_date.month, day=check_date.day
-                )
-                if abs((curr_corrected - expected).total_seconds()) < 4:
-                    console.print(
-                        f"[yellow]Correcting date (rollover) for {curr['file'].name}: {curr['start_time'].date()} -> {check_date}[/yellow]"
-                    )
-                    curr["start_time"] = curr_corrected
-                    if curr["end_time"]:
-                        curr["end_time"] = curr["end_time"].replace(
-                            year=check_date.year,
-                            month=check_date.month,
-                            day=check_date.day,
-                        )
-                    return True
-
-        except ValueError:
-            pass
+    except ValueError:
+        pass
 
     return False
 
 
-def group_videos(video_data: List[Dict]) -> List[List[Dict]]:
+def is_continuous(prev: VideoData, curr: VideoData) -> bool:
+    """Check if two videos are continuous using multiple strategies."""
+    # Try each continuity check in order
+    if check_theoretical_continuity(prev, curr):
+        return True
+
+    if check_explicit_continuity(prev, curr):
+        return True
+
+    if check_gap_filling(prev, curr):
+        return True
+
+    if check_date_correction(prev, curr):
+        return True
+
+    return False
+
+
+def group_videos(video_data: List[VideoData]) -> List[List[VideoData]]:
     # Initial pass to fill missing times
     for v in video_data:
         if v["start_time"] and not v["end_time"]:
@@ -437,7 +488,7 @@ def group_videos(video_data: List[Dict]) -> List[List[Dict]]:
                     # Check gap duration
                     gap = (next_v["start_time"] - prev["end_time"]).total_seconds()
                     # Expected gap is v['duration']
-                    if abs(gap - v["duration"]) < 5:  # 5s tolerance
+                    if abs(gap - v["duration"]) < BRIDGE_TOLERANCE_SECONDS:
                         console.print(
                             f"[yellow]Bridging gap (override) for {v['file'].name} (duration={v['duration']:.1f}s, gap={gap:.1f}s)[/yellow]"
                         )
@@ -469,7 +520,7 @@ def group_videos(video_data: List[Dict]) -> List[List[Dict]]:
     return groups
 
 
-def export_group(group: List[Dict], output_folder: Path):
+def export_group(group: List[VideoData], output_folder: Path) -> None:
     first = group[0]
     name = (
         first["start_time"].strftime("%Y-%m-%d_%H-%M-%S")
