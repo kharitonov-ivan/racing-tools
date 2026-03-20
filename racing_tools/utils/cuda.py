@@ -1,4 +1,7 @@
+"""CUDA hardware acceleration utilities."""
+
 import subprocess
+
 
 def check_cuda_availability() -> bool:
     """Check if CUDA hardware acceleration and AV1 NVENC encoder are available."""

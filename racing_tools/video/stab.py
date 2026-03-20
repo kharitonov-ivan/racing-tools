@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """
-Video Stabilization Script
+Video Stabilization Module
 ==========================
 
 Stabilizes onboard video using ffmpeg's vidstab filters (vidstabdetect + vidstabtransform).
 Performs a 2-pass stabilization.
-Uses NVIDIA Hardware Acceleration (decoding & AV1 encoding) or CPU fallback.
+Uses NVIDIA Hardware Acceleration (decoding & encoding) or CPU fallback.
 
 Usage:
-    python3 render/stab.py input.mp4 [output.mp4]
+    python -m racing_tools.video.stab input.mp4 [output.mp4]
+    # or
+    python racing_tools/video/stab.py input.mp4 [output.mp4]
 """
 
 import argparse

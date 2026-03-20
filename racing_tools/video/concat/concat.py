@@ -23,10 +23,12 @@ class VideoData(TypedDict):
         start_time: Optional datetime when video started
         end_time: Optional datetime when video ended
     """
+
     file: Path
     duration: float
     start_time: Optional[datetime]
     end_time: Optional[datetime]
+
 
 import pytesseract
 from PIL import Image, ImageOps
@@ -34,11 +36,7 @@ from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from tqdm import tqdm
 
-from racing_tools.session.video_info import probe_video
-
-
-import random
-from racing_tools.session.video_info import probe_video
+from racing_tools.video.video_info import probe_video
 
 console = Console()
 
@@ -72,9 +70,7 @@ def check_system_dependencies():
             missing.append(binary)
 
     if missing:
-        console.print(
-            f"[red bold]Missing system dependencies: {', '.join(missing)}[/red bold]"
-        )
+        console.print(f"[red bold]Missing system dependencies: {', '.join(missing)}[/red bold]")
         console.print(
             "[yellow]Install them:\n"
             "  Ubuntu/Debian: sudo apt install tesseract-ocr ffmpeg\n"
@@ -156,9 +152,7 @@ CROP_RATIOS = {
 DEFAULT_CROP_RATIOS = (0.60, 0.90, 1.0, 1.0)
 
 
-def detect_timestamp_from_image(
-    image: Image.Image, debug_save_path: Optional[Path] = None
-) -> Optional[datetime]:
+def detect_timestamp_from_image(image: Image.Image, debug_save_path: Optional[Path] = None) -> Optional[datetime]:
     w, h = image.size
     configs = []
 
@@ -183,9 +177,7 @@ def detect_timestamp_from_image(
                     configs.append((crop, thresh, invert, psm))
 
     for crop, thresh, invert, psm in configs:
-        processed = (
-            image.crop(crop).convert("L").point(lambda p: 255 if p > thresh else 0)
-        )
+        processed = image.crop(crop).convert("L").point(lambda p: 255 if p > thresh else 0)
         if invert:
             processed = ImageOps.invert(processed)
 
@@ -229,18 +221,12 @@ def sample_timestamps(
     offsets = sorted(list(set(offsets)))
 
     # Use tqdm for sampling progress, leave=False to clear after completion
-    for i, offset in enumerate(
-        tqdm(offsets, desc=f"Sampling {file_path.name}", leave=False)
-    ):
+    for i, offset in enumerate(tqdm(offsets, desc=f"Sampling {file_path.name}", leave=False)):
         img = extract_frame(file_path, offset)
         if not img:
             continue
 
-        debug_path = (
-            debug_folder / f"{file_path.stem}_sample_{i}_{offset:.1f}.jpg"
-            if debug_folder
-            else None
-        )
+        debug_path = debug_folder / f"{file_path.stem}_sample_{i}_{offset:.1f}.jpg" if debug_folder else None
         dt = detect_timestamp_from_image(img, debug_path)
 
         if dt:
@@ -249,9 +235,7 @@ def sample_timestamps(
     return samples
 
 
-def estimate_start_time(
-    samples: List[Tuple[float, datetime]], fps: float
-) -> Optional[datetime]:
+def estimate_start_time(samples: List[Tuple[float, datetime]], fps: float) -> Optional[datetime]:
     """
     Estimates the video start time from samples using robust consensus (RANSAC-like).
     """
@@ -327,9 +311,7 @@ def analyze_video(file_path: Path, debug_folder: Optional[Path]) -> VideoData:
         duration, fps, nb_frames = 0.0, 0.0, 0
 
     # Sample timestamps
-    samples = sample_timestamps(
-        file_path, duration, fps, num_samples=50, debug_folder=debug_folder
-    )
+    samples = sample_timestamps(file_path, duration, fps, num_samples=50, debug_folder=debug_folder)
 
     start_time = estimate_start_time(samples, fps)
 
@@ -375,9 +357,7 @@ def check_gap_filling(prev: VideoData, curr: VideoData) -> bool:
     if not curr["start_time"]:
         curr["start_time"] = expected_start
     elif abs((curr["start_time"] - expected_start).total_seconds()) > CONTINUITY_TOLERANCE_SECONDS:
-        console.print(
-            f"[yellow]Correcting start time for {curr['file'].name} based on end time[/yellow]"
-        )
+        console.print(f"[yellow]Correcting start time for {curr['file'].name} based on end time[/yellow]")
         curr["start_time"] = expected_start
     return True
 
@@ -391,35 +371,27 @@ def check_date_correction(prev: VideoData, curr: VideoData) -> bool:
 
     try:
         # Try correcting date while keeping time
-        curr_corrected = curr["start_time"].replace(
-            year=expected.year, month=expected.month, day=expected.day
-        )
+        curr_corrected = curr["start_time"].replace(year=expected.year, month=expected.month, day=expected.day)
 
         if abs((curr_corrected - expected).total_seconds()) < CONTINUITY_TOLERANCE_SECONDS:
-            console.print(
-                f"[yellow]Correcting date for {curr['file'].name}: {curr['start_time'].date()} -> {expected.date()}[/yellow]"
-            )
+            console.print(f"[yellow]Correcting date for {curr['file'].name}: {curr['start_time'].date()} -> {expected.date()}[/yellow]")
             curr["start_time"] = curr_corrected
             if curr["end_time"]:
-                curr["end_time"] = curr["end_time"].replace(
-                    year=expected.year, month=expected.month, day=expected.day
-                )
+                curr["end_time"] = curr["end_time"].replace(year=expected.year, month=expected.month, day=expected.day)
             return True
 
         # Handle day rollover (e.g. expected 23:59, curr 00:01)
         for offset in [1, -1]:
             check_date = expected.date() + timedelta(days=offset)
-            curr_corrected = curr["start_time"].replace(
-                year=check_date.year, month=check_date.month, day=check_date.day
-            )
+            curr_corrected = curr["start_time"].replace(year=check_date.year, month=check_date.month, day=check_date.day)
             if abs((curr_corrected - expected).total_seconds()) < CONTINUITY_TOLERANCE_SECONDS:
-                console.print(
-                    f"[yellow]Correcting date (rollover) for {curr['file'].name}: {curr['start_time'].date()} -> {check_date}[/yellow]"
-                )
+                console.print(f"[yellow]Correcting date (rollover) for {curr['file'].name}: {curr['start_time'].date()} -> {check_date}[/yellow]")
                 curr["start_time"] = curr_corrected
                 if curr["end_time"]:
                     curr["end_time"] = curr["end_time"].replace(
-                        year=check_date.year, month=check_date.month, day=check_date.day,
+                        year=check_date.year,
+                        month=check_date.month,
+                        day=check_date.day,
                     )
                 return True
 
@@ -522,11 +494,7 @@ def group_videos(video_data: List[VideoData]) -> List[List[VideoData]]:
 
 def export_group(group: List[VideoData], output_folder: Path) -> None:
     first = group[0]
-    name = (
-        first["start_time"].strftime("%Y-%m-%d_%H-%M-%S")
-        if first["start_time"]
-        else f"unknown_{first['file'].stem}"
-    )
+    name = first["start_time"].strftime("%Y-%m-%d_%H-%M-%S") if first["start_time"] else f"unknown_{first['file'].stem}"
     out_path = output_folder / f"{name}.mp4"
 
     if len(group) == 1:
@@ -547,9 +515,7 @@ def export_group(group: List[VideoData], output_folder: Path) -> None:
                 .run(capture_stdout=True, capture_stderr=True)
             )
         except ffmpeg.Error as e:
-            console.print(
-                f"[red]Concat failed: {e.stderr.decode() if e.stderr else str(e)}[/red]"
-            )
+            console.print(f"[red]Concat failed: {e.stderr.decode() if e.stderr else str(e)}[/red]")
         list_file.unlink()
 
 
@@ -577,15 +543,11 @@ def main():
         return
 
     video_data = []
-    with Progress(
-        SpinnerColumn(), TextColumn("{task.description}"), transient=True
-    ) as progress:
+    with Progress(SpinnerColumn(), TextColumn("{task.description}"), transient=True) as progress:
         task = progress.add_task("Processing...", total=len(files))
         for f in files:
             progress.update(task, description=f"Analyzing {f.name}")
-            video_data.append(
-                analyze_video(f, out_folder / "debug" if args.debug else None)
-            )
+            video_data.append(analyze_video(f, out_folder / "debug" if args.debug else None))
             progress.advance(task)
 
     groups = group_videos(video_data)

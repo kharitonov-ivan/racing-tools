@@ -25,14 +25,15 @@ Racing telemetry tools for processing, analyzing, and overlaying telemetry data 
 
 - **`session/`** - Telemetry data processing and normalization
   - `session.py`: Core `Session` class that loads telemetry from various formats (AIM, Alfano, CSV)
-  - `video_info.py`: Video metadata extraction using ffprobe
+  - `predictive.py`: `PredictiveLapModel` for lap time prediction based on distance
   - `convert.py`: CLI for converting telemetry formats to MoTeC .ld files
   - `channel_mapping.json`: Channel name/units normalization for different devices
 
 - **`track/`** - Track geometry and mapping
-  - `models.py`: `Track` and `TrackGeometry` classes for loading shapefiles, GPS coordinates
+  - `track.py`: `Track` class for loading track boundaries, centerline, bestline from GeoJSON files
+  - `utils.py`: Track utility functions (normalize_angle, compute_centerline, etc.)
+  - `segmentation.py`: Track segmentation into straights/turns
   - Supports WGS84 → Web Mercator and UTM projections for accurate distance calculations
-  - Loads track sectors/segments from GeoJSON files
 
 - **`run.py`** - Main video processing pipeline
   - Fisheye undistortion using camera calibration
@@ -41,11 +42,14 @@ Racing telemetry tools for processing, analyzing, and overlaying telemetry data 
   - ASS subtitle generation for gauges, track map, lap stats
   - Hardware-accelerated encoding (NVENC/AV1)
 
-- **`overlay.py`** - Legacy overlay renderer (being migrated to run.py)
+- **`camera/`** - Camera calibration utilities (checkerboard calibration, fisheye model)
 
-- **`camera/`** - Camera calibration utilities (checkerboard calibration, fisheye model, undistortion)
-
-- **`transcode.py`**, **`trim.py`**, **`video_split.py`** - Video utilities
+- **`video/`** - Video processing utilities
+  - `undistort.py`, `trim.py`, `transcode.py`, `split.py`: Video manipulation tools
+  - `stab.py`: Video stabilization using vidstab filters
+  - `overlay.py`: Overlay rendering functions (track map, gauges)
+  - `ass.py`: ASS subtitle generation for video overlays
+  - `video_info.py`: Video metadata probing
 
 ### Telemetry Processing Pipeline
 
@@ -107,13 +111,13 @@ uv run python racing_tools/run.py \
 
 ```bash
 # Trim video (interactive mode)
-uv run python racing_tools/trim.py input.mp4
+uv run python racing_tools/video/trim.py input.mp4
 
 # Transcode to AV1 with NVENC
-uv run python racing_tools/transcode.py input.mp4 -o output.mp4
+uv run python racing_tools/video/transcode.py input.mp4 -o output.mp4
 
 # Split video by laps
-uv run python racing_tools/video_split.py input.mp4 --crossings 10.5 25.3 40.1
+uv run python racing_tools/video/split.py input.mp4 --crossings 10.5 25.3 40.1
 ```
 
 ### Camera calibration
@@ -124,6 +128,24 @@ uv run python racing_tools/camera/find_intrinsics.py path/to/checkboard_images/
 
 # Undistort images using calibration
 uv run python racing_tools/camera/undistort.py --intrinsics camera.csv input.jpg
+```
+
+## Testing
+
+Test data is located in `data/test/`. Create 10-second clips from the middle of videos for testing:
+
+```bash
+# Create test clip from middle of video (e.g., at 387 seconds of 784s video)
+ffmpeg -y -i data/17-03-2026/17-23/2026-03-17_17-23-13.mp4 -ss 387 -t 10 -c copy data/test/test_10sec.mp4
+
+# Test undistortion
+uv run python racing_tools/video/undistort.py \
+  data/test/test_10sec.mp4 \
+  racing_tools/camera/intrinsics_fisheye.csv \
+  --output data/test/test_undistorted.mp4
+
+# Test stabilization
+uv run python racing_tools/video/stab.py data/test/test_10sec.mp4 --overwrite
 ```
 
 ## Development Notes

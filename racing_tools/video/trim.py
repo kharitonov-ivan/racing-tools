@@ -13,19 +13,20 @@ from typing import Optional, Any
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.append(str(REPO_ROOT / "render"))
 
-from racing_tools.sync_ui import run_trim_selection
+from racing_tools.utils.sync_ui import run_trim_selection
 
 
 @dataclass
 class VideoSidecar:
     """
     Universal sidecar file storage for video-related cached data.
-    
+
     Usage:
         sidecar = VideoSidecar.load(video_path, "sync")  # .sync-{name}.json
         sidecar.data  # {"offset": 1.234}
         sidecar.save({"offset": 1.234})
     """
+
     video_path: Path
     key: str  # "sync", "trim", "crossings"
     data: dict = field(default_factory=dict)
@@ -66,7 +67,7 @@ class TrimInfo:
     exists: bool = False
 
     @property
-    def info_path(self): 
+    def info_path(self):
         return self.video_path.with_suffix(".trim.json")
 
     @classmethod
@@ -96,6 +97,7 @@ class TrimInfo:
 @dataclass
 class CrossingsInfo:
     """Stores lap crossing times for a video."""
+
     video_path: Path
     times: list[float] = None
     exists: bool = False
@@ -139,39 +141,38 @@ def parse_args():
 def get_crossings_info(video_path: Path, start_time: float = 0.0, no_interactive: bool = False) -> CrossingsInfo:
     """
     Load or interactively create lap crossing times.
-    
+
     Args:
         video_path: Path to video file.
         start_time: Initial seek position for interactive UI.
         no_interactive: If True, skip interactive UI if no saved data.
-        
+
     Returns:
         CrossingsInfo with times list (may be empty if no data).
     """
-    from racing_tools.sync_ui import run_manual_lap_marking
-    
+    from racing_tools.utils.sync_ui import run_manual_lap_marking
+
     info = CrossingsInfo.load(video_path)
-    
+
     if info.exists:
         print(f"Found saved crossing times: {len(info.times)} laps at {info.times}")
         if not no_interactive:
             if input("Regenerate lap markings? [y/N]: ").strip().lower() == "y":
                 info.exists = False  # Force regeneration
-    
+
     if not info.exists and not no_interactive:
         times = run_manual_lap_marking(video_path, start_time=start_time)
         if times:
             info.save(times)
         else:
             print("No lap crossings marked")
-    
-    return info
 
+    return info
 
 
 def get_trim_info(video_path, no_interactive):
     info = TrimInfo.load(video_path)
-    
+
     if info.exists:
         print(f"Found saved trim info: Start {info.start:.3f}s, End {info.end}")
 
@@ -183,7 +184,7 @@ def get_trim_info(video_path, no_interactive):
         else:
             # Ask user
             try:
-                if input("Run interactive selection? [y/N]: ").strip().lower() == 'y':
+                if input("Run interactive selection? [y/N]: ").strip().lower() == "y":
                     should_interact = True
             except KeyboardInterrupt:
                 sys.exit(0)
@@ -198,16 +199,16 @@ def get_trim_info(video_path, no_interactive):
 
     if should_interact:
         if run_trim_selection is None:
-             sys.exit("Error: sync_ui module required for interactive mode.")
-        
+            sys.exit("Error: sync_ui module required for interactive mode.")
+
         print(f"Opening {video_path.name} for trim selection...")
         res = run_trim_selection(video_path)
-        if hasattr(res, '__len__') and len(res) == 2 and all(x is not None for x in res):
-             s, e = res
-             print(f"Selected Trim: Start {s:.3f}s, End {e:.3f}s")
-             info.save(s, e)
+        if hasattr(res, "__len__") and len(res) == 2 and all(x is not None for x in res):
+            s, e = res
+            print(f"Selected Trim: Start {s:.3f}s, End {e:.3f}s")
+            info.save(s, e)
         else:
-             sys.exit("Trim selection cancelled. Exiting.")
+            sys.exit("Trim selection cancelled. Exiting.")
 
     return info
 
@@ -215,7 +216,7 @@ def get_trim_info(video_path, no_interactive):
 def main():
     args = parse_args()
     video_path = args.video.expanduser().resolve()
-    
+
     if not video_path.exists():
         sys.exit(f"Error: Video file {video_path} not found.")
 
@@ -223,7 +224,7 @@ def main():
 
     if info.end is None:
         try:
-            info.end = float(ffmpeg.probe(str(video_path))['format']['duration'])
+            info.end = float(ffmpeg.probe(str(video_path))["format"]["duration"])
         except Exception as e:
             sys.exit(f"Error probing duration: {e}")
 
@@ -245,16 +246,11 @@ def main():
     print(f"Running ffmpeg from {info.start:.3f} with duration {duration:.3f}")
 
     try:
-        (
-            ffmpeg
-            .input(str(video_path), ss=info.start, t=duration)
-            .output(str(output_path), c="copy", map="0")
-            .overwrite_output()
-            .run()
-        )
+        (ffmpeg.input(str(video_path), ss=info.start, t=duration).output(str(output_path), c="copy", map="0").overwrite_output().run())
         print(f"Trim successful!\n{output_path}")
     except ffmpeg.Error as e:
         sys.exit(f"Error running ffmpeg: {e}")
+
 
 if __name__ == "__main__":
     main()
