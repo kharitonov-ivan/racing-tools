@@ -161,3 +161,9 @@ output/
 *.mov
 *.avi
 *.mkv
+
+data
+figures
+sound_to_rpm
+texture-nn
+racing_web
