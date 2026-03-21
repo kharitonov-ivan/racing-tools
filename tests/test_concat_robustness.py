@@ -8,10 +8,7 @@ from pathlib import Path
 
 import pytest
 
-# Add current directory to sys.path
-sys.path.append(str(Path(__file__).parent))
-
-from concat import analyze_video, group_videos
+from racing_tools.video.concat import analyze_video, group_videos
 
 
 def split_video(file_path: Path, output_dir: Path) -> list[Path]:

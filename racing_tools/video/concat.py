@@ -757,5 +757,102 @@ def order_videos_by_optical_flow(
     return groups
 
 
+def debug_crop(video_path: Path, output_dir: Path) -> None:
+    """Debug video crop and OCR for a given video."""
+    if not video_path.exists():
+        console.print(f"[red]Video not found: {video_path}[/red]")
+        return
+
+    console.print(f"Processing {video_path.name}...")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    timestamps = [0.0, 10.0, 30.0, 60.0]
+
+    for t in timestamps:
+        console.print(f"Checking frame at {t}s...")
+        img = extract_frame(video_path, t)
+        if not img:
+            console.print(f"Failed to extract frame at {t}s")
+            continue
+
+        original_path = output_dir / f"{video_path.stem}_original_{int(t)}.jpg"
+        img.save(original_path)
+
+        w, h = img.size
+        crop_box = (int(w * 0.80729), int(h * 0.935185), w, h)
+
+        from PIL import ImageDraw
+
+        vis_img = img.copy()
+        draw = ImageDraw.Draw(vis_img)
+        draw.rectangle(crop_box, outline="red", width=5)
+        vis_path = output_dir / f"{video_path.stem}_visualized_{int(t)}.jpg"
+        vis_img.save(vis_path)
+
+        cropped = img.crop(crop_box)
+        crop_path = output_dir / f"{video_path.stem}_cropped_{int(t)}.jpg"
+        cropped.save(crop_path)
+
+        dt = detect_timestamp_from_image(
+            img,
+            debug_save_path=output_dir / f"{video_path.stem}_ocr_debug_{int(t)}.jpg",
+        )
+        console.print(f"Detected Timestamp at {t}s: {dt}")
+
+
+def main():
+    check_system_dependencies()
+
+    parser = argparse.ArgumentParser(description="Concatenate racing videos.")
+    parser.add_argument("input_folder", type=Path)
+    parser.add_argument("--output", "-o", type=Path)
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--debug", action="store_true")
+    args = parser.parse_args()
+
+    if not args.input_folder.exists():
+        console.print("[red]Input folder not found[/red]")
+        sys.exit(1)
+
+    out_folder = args.output or args.input_folder
+    if args.debug:
+        (out_folder / "debug").mkdir(parents=True, exist_ok=True)
+
+    files = get_video_files(args.input_folder)
+    if not files:
+        console.print("[yellow]No videos found[/yellow]")
+        return
+
+    video_data = []
+    with Progress(SpinnerColumn(), TextColumn("{task.description}"), transient=True) as progress:
+        task = progress.add_task("Processing...", total=len(files))
+        for f in files:
+            progress.update(task, description=f"Analyzing {f.name}")
+            video_data.append(analyze_video(f, out_folder / "debug" if args.debug else None))
+            progress.advance(task)
+
+    groups = group_videos(video_data)
+
+    unlabeled = [v for v in video_data if not v.get("start_time")]
+    if unlabeled:
+        console.print(f"\n[yellow]Found {len(unlabeled)} videos without timestamps, trying optical flow ordering...[/yellow]")
+        flow_groups = order_videos_by_optical_flow(unlabeled)
+        for fg in flow_groups:
+            if fg:
+                groups.append(fg)
+                console.print(f"[yellow]  Flow group: {len(fg)} videos[/yellow]")
+
+    console.print(f"\nFound {len(groups)} groups:")
+    for i, g in enumerate(groups):
+        start = g[0]["start_time"]
+        s_str = start.strftime("%Y-%m-%d %H:%M:%S") if start else "?"
+        console.print(f"  Group {i + 1}: {len(g)} files, Start: {s_str}")
+
+    if not args.dry_run:
+        out_folder.mkdir(parents=True, exist_ok=True)
+        for g in groups:
+            export_group(g, out_folder)
+
+
 if __name__ == "__main__":
     main()

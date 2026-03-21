@@ -10,8 +10,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "racing_tools" / "video" / "concat"))
-from concat import (
+from racing_tools.video.concat import (
     VideoData,
     compute_flow_magnitude,
     extract_first_last_frames,
@@ -149,7 +148,7 @@ class TestOrderVideosByOpticalFlow:
                     return f
             return None, None
 
-        with patch("concat.extract_first_last_frames", side_effect=mock_extract):
+        with patch("racing_tools.video.concat.extract_first_last_frames", side_effect=mock_extract):
             result = order_videos_by_optical_flow(videos)
 
         assert len(result) == 1, "Should be one group"
@@ -178,7 +177,7 @@ class TestOrderVideosByOpticalFlow:
                     return f
             return None, None
 
-        with patch("concat.extract_first_last_frames", side_effect=mock_extract):
+        with patch("racing_tools.video.concat.extract_first_last_frames", side_effect=mock_extract):
             result = order_videos_by_optical_flow(videos)
 
         assert result[0][0]["file"].stem == "video_a", "Should start with 'video_a'"
@@ -216,7 +215,7 @@ class TestOrderVideosByOpticalFlow:
                     return f
             return None, None
 
-        with patch("concat.extract_first_last_frames", side_effect=mock_extract):
+        with patch("racing_tools.video.concat.extract_first_last_frames", side_effect=mock_extract):
             result = order_videos_by_optical_flow(videos)
 
         assert len(result) == 1, "Should be one group"
@@ -244,7 +243,7 @@ class TestOrderVideosByOpticalFlow:
                     return f
             return None, None
 
-        with patch("concat.extract_first_last_frames", side_effect=mock_extract):
+        with patch("racing_tools.video.concat.extract_first_last_frames", side_effect=mock_extract):
             result = order_videos_by_optical_flow(videos)
 
         assert len(result) == 1, "Should be one group"
