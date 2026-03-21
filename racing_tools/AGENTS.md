@@ -68,12 +68,20 @@ Racing telemetry tools for processing, analyzing, and overlaying telemetry data 
 
 ### Track Directory Structure
 
+Track data lives inside the package at `racing_tools/track/data/`.
+
 ```
-data/tracks/RIMSportKarting/
-├── centerline/centerline.shp         # Main track geometry
-├── start-finish/start-finish.shp     # Lap timing line
-├── sectors.geojson                   # Optional sector definitions
-└── bestline.geojson                  # Optional bestline GPS trajectory
+racing_tools/track/data/RIMSportKarting/
+├── geometry/
+│   ├── track-inner.geojson           # Inner track boundary (required)
+│   ├── track-outer.geojson           # Outer track boundary (required)
+│   ├── start-finish.geojson          # Lap timing line (optional)
+│   ├── centerline.geojson            # Centerline (optional, computed if missing)
+│   ├── bestline.geojson              # Optimal racing line (optional)
+│   ├── kerbs.geojson                 # Kerb geometry (optional)
+│   └── strips.geojson                # Strip geometry (optional)
+├── track_config.json                 # Track metadata (UTM zone, name)
+└── export/                           # Format exports (MoTeC, Alfano)
 ```
 
 ## Common Commands
@@ -98,13 +106,13 @@ uv run python racing_tools/session/convert.py alfano-excel path/to/alfano_excel
 uv run python racing_tools/run.py \
   --in input_video.mp4 \
   --telemetry path/to/telemetry_folder \
-  --track-dir data/tracks/RIMSportKarting \
+  --track-dir racing_tools/track/data/RIMSportKarting \
   --out output.mp4
 
 # Telemetry-only mode (no video)
 uv run python racing_tools/run.py \
   --telemetry path/to/telemetry_folder \
-  --track-dir data/tracks/RIMSportKarting
+  --track-dir racing_tools/track/data/RIMSportKarting
 ```
 
 ### Video utilities
@@ -146,6 +154,26 @@ uv run python racing_tools/video/undistort.py \
 
 # Test stabilization
 uv run python racing_tools/video/stab.py data/test/test_10sec.mp4 --overwrite
+```
+
+## Git Workflow
+
+For fixes and features, use a branch-based workflow:
+
+```bash
+# 1. Create a feature/fix branch from main
+git checkout -b fix/short-description
+
+# 2. Make changes, commit
+git add <files>
+git commit -m "fix: description of the fix"
+
+# 3. Merge back to main
+git checkout main
+git merge fix/short-description
+
+# 4. Delete the branch
+git branch -d fix/short-description
 ```
 
 ## Development Notes

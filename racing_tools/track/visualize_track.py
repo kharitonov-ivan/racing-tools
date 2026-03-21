@@ -13,7 +13,7 @@ Usage:
     python -m racing_tools.track.visualize_track /path/to/track/dir
 
 Example:
-    python -m racing_tools.track.visualize_track data/tracks/RIMSportKarting
+    python -m racing_tools.track.visualize_track racing_tools/track/data/RIMSportKarting
 """
 
 import argparse
