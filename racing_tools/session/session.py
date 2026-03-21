@@ -78,11 +78,27 @@ class PiecewiseSync:
         for i, (video, telem) in enumerate(self.anchors):
             print(f"  Anchor {i + 1}: video={video:.3f}s, telemetry={telem:.3f}s")
 
+    @staticmethod
+    def _interp_extrapolate(x: np.ndarray | float, xp: np.ndarray, fp: np.ndarray) -> np.ndarray:
+        """np.interp with linear extrapolation beyond the anchor range."""
+        x_arr = np.atleast_1d(np.asarray(x, dtype=float))
+        result = np.interp(x_arr, xp, fp)
+        if len(xp) >= 2:
+            left_mask = x_arr < xp[0]
+            if np.any(left_mask):
+                slope = (fp[1] - fp[0]) / (xp[1] - xp[0])
+                result[left_mask] = fp[0] + slope * (x_arr[left_mask] - xp[0])
+            right_mask = x_arr > xp[-1]
+            if np.any(right_mask):
+                slope = (fp[-1] - fp[-2]) / (xp[-1] - xp[-2])
+                result[right_mask] = fp[-1] + slope * (x_arr[right_mask] - xp[-1])
+        return result
+
     def video_to_telemetry(self, video_time: np.ndarray | float) -> np.ndarray:
-        return np.interp(video_time, self._v, self._t)
+        return self._interp_extrapolate(video_time, self._v, self._t)
 
     def telemetry_to_video(self, telem_time: np.ndarray | float) -> np.ndarray:
-        return np.interp(telem_time, self._t, self._v)
+        return self._interp_extrapolate(telem_time, self._t, self._v)
 
     @classmethod
     def from_offset(cls, offset: float) -> "PiecewiseSync":
@@ -288,10 +304,12 @@ class Session:
         else:
             moving = np.ones(len(headings), dtype=bool)
 
-        mean_heading = np.degrees(np.arctan2(
-            np.mean(np.sin(np.radians(headings[moving]))),
-            np.mean(np.cos(np.radians(headings[moving]))),
-        ))
+        mean_heading = np.degrees(
+            np.arctan2(
+                np.mean(np.sin(np.radians(headings[moving]))),
+                np.mean(np.cos(np.radians(headings[moving]))),
+            )
+        )
         print(f"[Track] Mean heading: {mean_heading:.1f}°")
         # Positive mean sin of heading change → CCW
         dh = np.diff(headings[moving])
