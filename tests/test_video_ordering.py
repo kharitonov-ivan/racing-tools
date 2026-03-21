@@ -250,3 +250,38 @@ class TestOrderVideosByOpticalFlow:
         assert len(result) == 1, "Should be one group"
         first_name = result[0][0]["file"].stem
         assert first_name == "a_video", f"First should be 'a_video' (lexicographic), got '{first_name}'"
+
+    def test_real_videos_ordered_by_optical_flow(self):
+        """Test ordering with real video files from test_data."""
+        test_dir = Path(__file__).parent / "test_data"
+        if not test_dir.exists():
+            pytest.skip("test_data directory not found")
+
+        videos = list(test_dir.glob("video_*.mp4"))
+        if len(videos) < 2:
+            pytest.skip("Need at least 2 test videos")
+
+        video_data: list[VideoData] = [{"file": v, "duration": 15.0, "start_time": None, "end_time": None} for v in videos]
+
+        result = order_videos_by_optical_flow(video_data)
+
+        assert len(result) >= 1, "Should have at least one group"
+        assert len(result[0]) == len(videos), f"Should have all {len(videos)} videos in first group"
+
+        first_name = result[0][0]["file"].stem
+        assert first_name == "video_a", f"First video should be 'video_a' (lexicographically first), got '{first_name}'"
+
+    def test_crop_middle_excludes_timestamp_area(self):
+        """Verify that frames are cropped to middle region."""
+        test_dir = Path(__file__).parent / "test_data"
+        if not test_dir.exists():
+            pytest.skip("test_data directory not found")
+
+        videos = list(test_dir.glob("video_*.mp4"))
+        if not videos:
+            pytest.skip("No test videos found")
+
+        first, last = extract_first_last_frames(videos[0])
+        assert first is not None, "Should extract frame"
+        assert first.shape[1] < 1920, "Width should be cropped (was 1920, now < 1920)"
+        assert first.shape[0] < 1080, "Height should be cropped (was 1080, now < 1080)"

@@ -635,8 +635,14 @@ def extract_first_last_frames(file_path: Path) -> tuple[Optional[np.ndarray], Op
         return None, None
 
 
-def _extract_frame_as_array(file_path: Path, time_offset: float) -> Optional[np.ndarray]:
-    """Extract single frame as numpy array."""
+def _extract_frame_as_array(file_path: Path, time_offset: float, crop_middle: bool = True) -> Optional[np.ndarray]:
+    """Extract single frame as numpy array.
+
+    Args:
+        file_path: Path to video file
+        time_offset: Time offset in seconds
+        crop_middle: If True, crop middle 60%% of frame to avoid OCR/timestamp areas
+    """
     try:
         out, _ = (
             ffmpeg.input(str(file_path), ss=time_offset)
@@ -645,7 +651,16 @@ def _extract_frame_as_array(file_path: Path, time_offset: float) -> Optional[np.
         )
         info = probe_video(file_path)
         h, w = int(info.height), int(info.width)
-        return np.frombuffer(out, dtype=np.uint8).reshape((h, w, 3))
+        frame = np.frombuffer(out, dtype=np.uint8).reshape((h, w, 3))
+
+        if crop_middle:
+            left = int(w * 0.2)
+            right = int(w * 0.8)
+            top = int(h * 0.1)
+            bottom = int(h * 0.7)
+            frame = frame[top:bottom, left:right]
+
+        return frame
     except Exception:
         return None
 
