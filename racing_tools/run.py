@@ -213,12 +213,17 @@ def main() -> int:
     if args.telemetry:
         emit_gauge_ass(ass, video_session)
 
+    # Write canonical ASS in source-video time (user opens this with source .mp4)
     ass_path = ass.write(Path(args.out).with_suffix(".ass"))
 
-    # --- Build ffmpeg pipeline: subtitles first, then trim ---
+    # Derive trimmed ASS for the ffmpeg pipeline (timestamps shifted by -trim_start)
+    trimmed_ass_path = Path(args.out).with_name(f"{Path(args.out).stem}_trimmed.ass")
+    ass.write_with_offset(trimmed_ass_path, time_offset=-trim_start)
+
+    # --- Build ffmpeg pipeline: trim first, then trimmed subtitles ---
     pipeline = build_opener(Path(args.inp), hwaccel=hwaccel)
-    pipeline = Pipeline(pipeline.video.filter("subtitles", filename=ass_path), pipeline.audio)
     pipeline = build_trimer(pipeline, trim_start, trim_end)
+    pipeline = Pipeline(pipeline.video.filter("subtitles", filename=str(trimmed_ass_path)), pipeline.audio)
 
     if args.intrinsics:
         camera_model = CameraModel.load(Path(args.intrinsics))

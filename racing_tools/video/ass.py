@@ -87,14 +87,16 @@ class AssBuilder:
             cs = int(s_cs[1]) if len(s_cs) > 1 else 0
             return h * 3600 + m * 60 + s + cs / 100.0
 
-        def offset_event(event: str, offset: float) -> str:
+        def offset_event(event: str, offset: float) -> str | None:
             match = re.match(r"(Dialogue:\s*\d+,)(\d+:\d+:\d+\.\d+),(\d+:\d+:\d+\.\d+),(.*)", event)
             if not match:
                 return event
             prefix, start, end, rest = match.groups()
-            new_start = fmt_ass_time(parse_ass_time(start) + offset)
-            new_end = fmt_ass_time(parse_ass_time(end) + offset)
-            return f"{prefix}{new_start},{new_end},{rest}"
+            new_end_t = parse_ass_time(end) + offset
+            if new_end_t <= 0:
+                return None
+            new_start_t = max(0.0, parse_ass_time(start) + offset)
+            return f"{prefix}{fmt_ass_time(new_start_t)},{fmt_ass_time(new_end_t)},{rest}"
 
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(f"[Script Info]\nScriptType: v4.00+\nPlayResX: {self.width}\nPlayResY: {self.height}\n\n")
@@ -107,7 +109,9 @@ class AssBuilder:
             f.write("\n[Events]\n")
             f.write("Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n")
             for e in self.events:
-                f.write(offset_event(e, time_offset) + "\n")
+                shifted = offset_event(e, time_offset)
+                if shifted is not None:
+                    f.write(shifted + "\n")
 
         print(f"[ASS] Saved with offset {time_offset:.2f}s: {output_path}")
 
