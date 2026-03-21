@@ -15,6 +15,7 @@ from racing_tools.session.session import (
     VideoSession,
     create_session_from_crossings,
 )
+from racing_tools.session.crossing_validation import validate_crossings
 from racing_tools.session.distance import ensure_distance
 from racing_tools.track.track import Track
 from racing_tools.track.visualize_track import plot_track
@@ -161,19 +162,13 @@ def main() -> int:
         session.to_motec(output=motec_output, frequency=10.0)
         print(f"[MoTeC] Exported to {motec_output}")
 
-        # Build piecewise sync from matched crossing pairs
-        n_pairs = min(len(crossings_video), len(crossings_telem))
-        if n_pairs >= 1:
-            anchors = list(zip(crossings_video[:n_pairs], crossings_telem[:n_pairs]))
-            sync_mapping = PiecewiseSync(anchors=anchors)
-            print(f"[Sync] Built piecewise mapping with {n_pairs} anchor points:")
-            for i, (v, t) in enumerate(anchors):
-                print(f"  Crossing {i + 1}: video={v:.3f}s <-> telem={t:.3f}s (offset={t - v:.3f}s)")
-            if len(crossings_video) != len(crossings_telem):
-                print(f"[Sync] Warning: crossing count mismatch — video={len(crossings_video)}, telem={len(crossings_telem)}")
-        else:
-            print("[Sync] Warning: no matching crossings, using offset=0")
-            sync_mapping = PiecewiseSync.from_offset(0.0)
+        # Validate and build piecewise sync from crossing pairs
+        validate_crossings(crossings_video, crossings_telem)
+        anchors = list(zip(crossings_video, crossings_telem))
+        sync_mapping = PiecewiseSync(anchors=anchors)
+        print(f"[Sync] Built piecewise mapping with {len(anchors)} anchor points:")
+        for i, (v, t) in enumerate(anchors):
+            print(f"  Crossing {i + 1}: video={v:.3f}s <-> telem={t:.3f}s (offset={t - v:.3f}s)")
     else:
         # No telemetry — create session from video crossings
         session = create_session_from_crossings(video_info, crossings_video)
