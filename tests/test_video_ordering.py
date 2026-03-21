@@ -194,3 +194,59 @@ class TestOrderVideosByOpticalFlow:
         result = order_videos_by_optical_flow([video_with_ts, video_without_ts])
         flow_groups = [g for g in result if g and g[0] == video_without_ts]
         assert len(flow_groups) >= 1, "Video without timestamp should be in flow groups"
+
+    def test_lexicographic_order_when_flows_equal(self):
+        """When all flows are equal, output should follow lexicographic order."""
+        videos = [
+            self._make_video_data("c_video"),
+            self._make_video_data("a_video"),
+            self._make_video_data("b_video"),
+        ]
+        np.random.seed(42)
+        identical_frame = np.random.randint(0, 255, (240, 320, 3), dtype=np.uint8)
+        frames = {
+            "a_video": (identical_frame.copy(), identical_frame.copy()),
+            "b_video": (identical_frame.copy(), identical_frame.copy()),
+            "c_video": (identical_frame.copy(), identical_frame.copy()),
+        }
+
+        def mock_extract(path: Path) -> tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+            for name, f in frames.items():
+                if name in str(path):
+                    return f
+            return None, None
+
+        with patch("concat.extract_first_last_frames", side_effect=mock_extract):
+            result = order_videos_by_optical_flow(videos)
+
+        assert len(result) == 1, "Should be one group"
+        names = [v["file"].stem for v in result[0]]
+        assert names == ["a_video", "b_video", "c_video"], f"Expected lexicographic order, got {names}"
+
+    def test_lexicographic_first_regardless_of_flow(self):
+        """First video in output should always be lexicographically first."""
+        np.random.seed(42)
+        frame_a = np.random.randint(0, 255, (240, 320, 3), dtype=np.uint8)
+        frame_z = np.random.randint(0, 255, (240, 320, 3), dtype=np.uint8)
+        frame_z[:, :, 0] = 255 - frame_z[:, :, 0]
+        videos = [
+            self._make_video_data("z_video"),
+            self._make_video_data("a_video"),
+        ]
+        frames = {
+            "a_video": (frame_a, frame_a),
+            "z_video": (frame_z, frame_z),
+        }
+
+        def mock_extract(path: Path) -> tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+            for name, f in frames.items():
+                if name in str(path):
+                    return f
+            return None, None
+
+        with patch("concat.extract_first_last_frames", side_effect=mock_extract):
+            result = order_videos_by_optical_flow(videos)
+
+        assert len(result) == 1, "Should be one group"
+        first_name = result[0][0]["file"].stem
+        assert first_name == "a_video", f"First should be 'a_video' (lexicographic), got '{first_name}'"
