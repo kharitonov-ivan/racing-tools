@@ -118,8 +118,9 @@ def main() -> int:
     if args.track_dir:
         track = Track.load(args.track_dir)
         print(f"[Track] Loaded track from: {args.track_dir}")
-        plot_track(track=track, track_dir=Path(args.track_dir))
-        print(f"[Track] Visualization saved to: {Path(args.track_dir) / 'track_visualization.png'}")
+        output_vis_path = inp_path.parent / "track_visualization.png"
+        plot_track(track=track, track_dir=Path(args.track_dir), output_path=output_vis_path)
+        print(f"[Track] Visualization saved to: {output_vis_path}")
 
     # --- Step 1: Always get video crossings via manual lap marking ---
     crossings_sidecar = VideoSidecar.load(Path(args.inp), "crossings")
