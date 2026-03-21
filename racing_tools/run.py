@@ -193,20 +193,31 @@ def main() -> int:
     if args.telemetry and sync_mapping is not None:
         video_session.table = video_session.resample_to_video(
             fps=video_info.fps,
-            trim_start=trim_start,
-            duration=trim_end - trim_start,
+            trim_start=0.0,
+            duration=video_info.duration,
             sync=sync_mapping,
         )
 
-    # Use video crossings (adjusted for trim) as display crossings
+    # Use source-video crossings (not trim-adjusted) for display
     if crossings_video:
-        video_session.crossings = [max(0.0, c - trim_start) for c in crossings_video]
-        print(f"[Crossings] Display crossings (trim={trim_start:.2f}): {video_session.crossings[:3]}...")
+        video_session.crossings = list(crossings_video)
+        print(f"[Crossings] Display crossings (source time): {video_session.crossings[:3]}...")
     # Store GPS crossings for comparison in lap table
     if args.telemetry and sync_mapping is not None:
         video_session.crossings_gps = crossings_telem
 
+    # --- ASS overlay generation (source-video time) ---
+    ass = AssBuilder(video_info.width, video_info.height)
+    emit_lap_stats_ass(ass, video_session)
+
+    if args.telemetry:
+        emit_gauge_ass(ass, video_session)
+
+    ass_path = ass.write(Path(args.out).with_suffix(".ass"))
+
+    # --- Build ffmpeg pipeline: subtitles first, then trim ---
     pipeline = build_opener(Path(args.inp), hwaccel=hwaccel)
+    pipeline = Pipeline(pipeline.video.filter("subtitles", filename=ass_path), pipeline.audio)
     pipeline = build_trimer(pipeline, trim_start, trim_end)
 
     if args.intrinsics:
@@ -246,34 +257,6 @@ def main() -> int:
             crop=args.crop,
             interpol=args.interpol,
         )
-
-    # --- ASS overlay generation (unified) ---
-    ass = AssBuilder(video_info.width, video_info.height)
-    emit_lap_stats_ass(ass, video_session)
-
-    if args.telemetry:
-        emit_gauge_ass(ass, video_session)
-
-    ass_path = ass.write(Path(args.out).with_suffix(".ass"))
-
-    # Generate source-video-time ASS (full timeline, for verification with source .mp4)
-    if args.telemetry and sync_mapping is not None:
-        source_session = VideoSession.from_session(session, Path(args.inp))
-        source_session.table = source_session.resample_to_video(
-            fps=video_info.fps,
-            trim_start=0.0,
-            duration=video_info.duration,
-            sync=sync_mapping,
-        )
-        source_session.crossings = list(crossings_video)
-
-        source_ass = AssBuilder(video_info.width, video_info.height)
-        emit_gauge_ass(source_ass, source_session)
-        source_ass_path = Path(args.out).with_name(f"{Path(args.out).stem}_source.ass")
-        source_ass.write(source_ass_path)
-        print(f"[ASS] Source-time ASS for verification: {source_ass_path}")
-
-    pipeline = Pipeline(pipeline.video.filter("subtitles", filename=ass_path), pipeline.audio)
 
     # Per-lap track map overlay
     if args.telemetry and track:
