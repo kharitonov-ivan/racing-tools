@@ -145,65 +145,159 @@ class Session:
                 return name
         return None
 
-    def detect_crossings(self) -> list[float]:
+    def detect_crossings(
+        self,
+        min_lap_time: float = MIN_VALID_LAP_TIME,
+        sf_margin_m: float = 1.0,
+    ) -> list[float]:
+        """Detect lap crossings using signed distance from SF line + proximity filter.
+
+        Uses signed distance from the infinite SF line for robust zero-crossing
+        detection, but requires GPS point to be within (SF_length/2 + margin)
+        of the SF midpoint to reject crossings on other parts of the track.
+
+        Args:
+            min_lap_time: Minimum time between crossings to reject noise (seconds)
+            sf_margin_m: Extra margin beyond SF endpoints (meters)
+
+        Returns:
+            List of crossing times in seconds
+        """
         if self.track is None or self.track.start_finish_wgs84 is None:
-            print("[DEBUG] No track or start/finish line defined.")
+            print("[Crossings] No track or start/finish line defined.")
             return []
 
         lat_col = self._pick_column(["GPS Latitude", "Latitude"])
         lon_col = self._pick_column(["GPS Longitude", "Longitude"])
-        if not lat_col or not lon_col:
-            print("[DEBUG] Missing GPS Latitude/Longitude columns.")
-            return []
+        assert lat_col and lon_col, "Missing GPS Latitude/Longitude columns"
+
+        if "Heading" not in self.table.columns:
+            self.compute_heading()
+
+        direction = self.detect_track_direction()
+        print(f"[Crossings] Track direction: {direction}")
 
         lats = pd.to_numeric(self.table[lat_col], errors="coerce").values
         lons = pd.to_numeric(self.table[lon_col], errors="coerce").values
-        times = pd.to_numeric(self.table["Time"], errors="coerce").values if "Time" in self.table.columns else self.table.index.values
+        times = pd.to_numeric(self.table["Time"], errors="coerce").values
 
         sf_points = list(dict.fromkeys(self.track.start_finish_wgs84))
-        if len(sf_points) < 2:
-            print("[DEBUG] Insufficient start/finish line points.")
-            return []
+        assert len(sf_points) >= 2, "Start/finish line needs at least 2 points"
         sf_p1, sf_p2 = sf_points[0], sf_points[-1]
 
         sf_dx = sf_p2[0] - sf_p1[0]
         sf_dy = sf_p2[1] - sf_p1[1]
-        sf_len = (sf_dx**2 + sf_dy**2) ** 0.5
+        sf_len_m = ((sf_dx * 111000) ** 2 + (sf_dy * 111000) ** 2) ** 0.5
+        print(f"[Crossings] SF line: {sf_len_m:.1f}m, margin: {sf_margin_m:.1f}m")
 
-        print(f"[DEBUG] Start-finish line: length={sf_len:.6f}° (≈{sf_len * 111000:.1f}m)")
+        # SF midpoint and max allowed distance along SF direction
+        sf_mid = np.array([(sf_p1[0] + sf_p2[0]) / 2, (sf_p1[1] + sf_p2[1]) / 2])
+        max_along_m = sf_len_m / 2 + sf_margin_m
 
-        crossings = []
-        prev_sign: int | None = None
+        # SF unit vectors: along and normal (in degree-space)
+        sf_along = np.array([sf_dx, sf_dy])
+        sf_along_len = np.linalg.norm(sf_along)
+        sf_along_unit = sf_along / sf_along_len
 
-        for i in range(1, len(self.table)):
+        sf_norm = np.array([-sf_dy, sf_dx])
+        sf_norm = sf_norm / np.linalg.norm(sf_norm)
+
+        # Signed distance from SF line for all points. Shape: (N,)
+        dx = lons - sf_p1[0]
+        dy = lats - sf_p1[1]
+        signed_dist = dx * sf_norm[0] + dy * sf_norm[1]
+
+        # Distance along SF direction from midpoint. Shape: (N,)
+        dx_mid = lons - sf_mid[0]
+        dy_mid = lats - sf_mid[1]
+        along_dist_m = (dx_mid * sf_along_unit[0] + dy_mid * sf_along_unit[1]) * 111000
+
+        # Lock expected crossing sign from first valid crossing
+        expected_sign: int | None = None
+
+        crossings: list[float] = []
+        for i in range(1, len(signed_dist)):
             if times[i] <= 0.0:
                 continue
 
-            # Check if GPS trajectory segment crosses the start-finish line
-            gps_p1 = (lons[i - 1], lats[i - 1])
-            gps_p2 = (lons[i], lats[i])
+            # No sign change → no crossing
+            if signed_dist[i - 1] * signed_dist[i] >= 0:
+                continue
 
-            intersects, t_param, sign = segments_intersect(
-                (sf_p1[0], sf_p1[1]),
-                (sf_p2[0], sf_p2[1]),
-                gps_p1, gps_p2
-            )
+            # Proximity filter: crossing point must be near the SF segment
+            frac = abs(signed_dist[i - 1]) / (abs(signed_dist[i - 1]) + abs(signed_dist[i]))
+            along_at_crossing = along_dist_m[i - 1] + frac * (along_dist_m[i] - along_dist_m[i - 1])
+            if abs(along_at_crossing) > max_along_m:
+                continue
 
-            if intersects and t_param is not None:
-                # Check direction consistency (skip reverse crossings from GPS jitter)
-                if prev_sign is not None and sign != prev_sign:
-                    continue
+            # Crossing sign: direction of signed distance transition
+            sign = 1 if signed_dist[i] > signed_dist[i - 1] else -1
 
-                # Interpolate crossing time along the GPS segment
-                crossing_time = times[i - 1] + t_param * (times[i] - times[i - 1])
+            # Lock expected sign from first crossing
+            if expected_sign is None:
+                expected_sign = sign
+            elif sign != expected_sign:
+                continue
 
-                print(f"[DEBUG] Valid crossing detected at time {crossing_time:.2f}s (sign={sign})")
-                crossings.append(crossing_time)
-                prev_sign = sign
+            crossing_time = times[i - 1] + frac * (times[i] - times[i - 1])
 
-        print(f"[DEBUG] Total valid crossings detected: {len(crossings)}")
+            # Min lap time filter
+            if crossings and (crossing_time - crossings[-1]) < min_lap_time:
+                continue
+
+            crossings.append(crossing_time)
+
+        print(f"[Crossings] Detected {len(crossings)} GPS crossings")
         self.crossings = crossings
         return crossings
+
+    def compute_heading(self) -> None:
+        """Compute heading from GPS trajectory and add as 'Heading' column.
+
+        Heading in degrees, 0=east, CCW positive (standard math convention).
+        First sample gets same heading as second. Shape: (N,).
+        """
+        lat_col = self._pick_column(["GPS Latitude", "Latitude"])
+        lon_col = self._pick_column(["GPS Longitude", "Longitude"])
+        assert lat_col and lon_col, "Missing GPS Latitude/Longitude columns"
+
+        lats = pd.to_numeric(self.table[lat_col], errors="coerce").values
+        lons = pd.to_numeric(self.table[lon_col], errors="coerce").values
+
+        dlon = np.diff(lons)  # Shape: (N-1,)
+        dlat = np.diff(lats)  # Shape: (N-1,)
+        headings = np.degrees(np.arctan2(dlat, dlon))  # Shape: (N-1,)
+
+        # Pad first sample with same value as second
+        self.table["Heading"] = np.concatenate([[headings[0]], headings])
+
+    def detect_track_direction(self) -> str:
+        """Determine track direction (CW/CCW) from GPS trajectory.
+
+        Returns:
+            'CCW' or 'CW'
+        """
+        assert "Heading" in self.table.columns, "Call compute_heading() first"
+
+        speed_col = self._pick_column(["GPS Speed"])
+        headings = self.table["Heading"].values
+
+        if speed_col:
+            speeds = pd.to_numeric(self.table[speed_col], errors="coerce").values
+            moving = speeds > 20.0
+        else:
+            moving = np.ones(len(headings), dtype=bool)
+
+        mean_heading = np.degrees(np.arctan2(
+            np.mean(np.sin(np.radians(headings[moving]))),
+            np.mean(np.cos(np.radians(headings[moving]))),
+        ))
+        print(f"[Track] Mean heading: {mean_heading:.1f}°")
+        # Positive mean sin of heading change → CCW
+        dh = np.diff(headings[moving])
+        # Normalize to [-180, 180]
+        dh = (dh + 180) % 360 - 180
+        return "CCW" if np.mean(dh) > 0 else "CW"
 
     def add_lap_numbers(self) -> None:
         times = pd.to_numeric(self.table["Time"], errors="coerce").values if "Time" in self.table.columns else self.table.index.values
