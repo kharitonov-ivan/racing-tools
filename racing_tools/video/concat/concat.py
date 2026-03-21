@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import ffmpeg
 import random
 import re
 import shutil
@@ -12,6 +11,10 @@ from datetime import datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 from typing import List, Optional, TypedDict
+
+import cv2
+import ffmpeg
+import numpy as np
 
 
 class VideoData(TypedDict):
@@ -552,6 +555,15 @@ def main():
 
     groups = group_videos(video_data)
 
+    unlabeled = [v for v in video_data if not v.get("start_time")]
+    if unlabeled:
+        console.print(f"\n[yellow]Found {len(unlabeled)} videos without timestamps, trying optical flow ordering...[/yellow]")
+        flow_groups = order_videos_by_optical_flow(unlabeled)
+        for fg in flow_groups:
+            if fg:
+                groups.append(fg)
+                console.print(f"[yellow]  Flow group: {len(fg)} videos[/yellow]")
+
     console.print(f"\nFound {len(groups)} groups:")
     for i, g in enumerate(groups):
         start = g[0]["start_time"]
@@ -562,6 +574,172 @@ def main():
         out_folder.mkdir(parents=True, exist_ok=True)
         for g in groups:
             export_group(g, out_folder)
+
+
+def compute_flow_magnitude(frame1: np.ndarray, frame2: np.ndarray) -> float:
+    """Compute mean optical flow magnitude between two frames.
+
+    Args:
+        frame1: First frame (H, W, 3) BGR from OpenCV
+        frame2: Second frame (H, W, 3) BGR from OpenCV
+
+    Returns:
+        Mean flow magnitude in pixels
+    """
+    if frame1 is None or frame2 is None:
+        return float("inf")
+
+    frame1_gray = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
+    frame2_gray = cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY)
+
+    flow = cv2.calcOpticalFlowFarneback(
+        frame1_gray,
+        frame2_gray,
+        None,
+        pyr_scale=0.5,
+        levels=3,
+        winsize=15,
+        iterations=3,
+        poly_n=5,
+        poly_sigma=1.2,
+        flags=0,
+    )
+
+    magnitude, _ = cv2.cartToPolar(flow[..., 0], flow[..., 1])
+    return float(np.mean(magnitude))
+
+
+def extract_first_last_frames(file_path: Path) -> tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+    """Extract first and last frames from video.
+
+    Args:
+        file_path: Path to video file
+
+    Returns:
+        Tuple of (first_frame, last_frame) as numpy arrays, or (None, None) on failure
+    """
+    try:
+        info = probe_video(file_path)
+        duration = info.duration
+    except Exception:
+        return None, None
+
+    if duration < 1.0:
+        return None, None
+
+    try:
+        first_frame = _extract_frame_as_array(file_path, 0.5)
+        last_frame = _extract_frame_as_array(file_path, duration - 0.5)
+        return first_frame, last_frame
+    except Exception:
+        return None, None
+
+
+def _extract_frame_as_array(file_path: Path, time_offset: float) -> Optional[np.ndarray]:
+    """Extract single frame as numpy array."""
+    try:
+        out, _ = (
+            ffmpeg.input(str(file_path), ss=time_offset)
+            .output("pipe:", vframes=1, format="rawvideo", pix_fmt="bgr24")
+            .run(capture_stdout=True, capture_stderr=True)
+        )
+        info = probe_video(file_path)
+        h, w = int(info.height), int(info.width)
+        return np.frombuffer(out, dtype=np.uint8).reshape((h, w, 3))
+    except Exception:
+        return None
+
+
+def order_videos_by_optical_flow(
+    videos: List[VideoData],
+    break_threshold_multiplier: float = 2.0,
+) -> List[List[VideoData]]:
+    """Order videos by optical flow continuity.
+
+    Uses greedy chaining: starts with lexicographically first video,
+    then iteratively appends the video with lowest flow from previous end.
+    Auto-detects breaks when flow exceeds threshold.
+
+    Args:
+        videos: List of VideoData with no start_time
+        break_threshold_multiplier: Break when best_flow > median * multiplier
+
+    Returns:
+        List of groups, each group is a list of videos in order
+    """
+    if not videos:
+        return []
+
+    if len(videos) == 1:
+        return [videos]
+
+    unlabeled = [v for v in videos if not v.get("start_time")]
+    if not unlabeled:
+        return []
+
+    unlabeled = sorted(unlabeled, key=lambda v: str(v["file"]))
+
+    frames_cache: dict[Path, tuple[Optional[np.ndarray], Optional[np.ndarray]]] = {}
+
+    def get_flow(idx1: int, idx2: int) -> float:
+        v1, v2 = unlabeled[idx1], unlabeled[idx2]
+        if v1["file"] not in frames_cache:
+            frames_cache[v1["file"]] = extract_first_last_frames(v1["file"])
+        if v2["file"] not in frames_cache:
+            frames_cache[v2["file"]] = extract_first_last_frames(v2["file"])
+
+        _, last1 = frames_cache[v1["file"]]
+        first2, _ = frames_cache[v2["file"]]
+
+        if last1 is None or first2 is None:
+            return float("inf")
+
+        return compute_flow_magnitude(last1, first2)
+
+    groups: List[List[VideoData]] = []
+    used: set[int] = set()
+
+    for start_idx in range(len(unlabeled)):
+        if start_idx in used:
+            continue
+
+        group = [unlabeled[start_idx]]
+        used.add(start_idx)
+        current_idx = start_idx
+
+        while True:
+            best_next: Optional[int] = None
+            best_flow = float("inf")
+
+            for j in range(len(unlabeled)):
+                if j in used:
+                    continue
+                flow = get_flow(current_idx, j)
+                if flow < best_flow:
+                    best_flow = flow
+                    best_next = j
+
+            if best_next is None:
+                break
+
+            all_flows: list[float] = []
+            for i in range(len(unlabeled)):
+                for j in range(len(unlabeled)):
+                    if i != j and i not in used and j not in used:
+                        all_flows.append(get_flow(i, j))
+
+            if len(all_flows) >= 2:
+                median_flow = sorted(all_flows)[len(all_flows) // 2]
+                if best_flow > median_flow * break_threshold_multiplier:
+                    break
+
+            group.append(unlabeled[best_next])
+            used.add(best_next)
+            current_idx = best_next
+
+        groups.append(group)
+
+    return groups
 
 
 if __name__ == "__main__":
