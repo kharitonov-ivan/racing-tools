@@ -20,6 +20,7 @@ from racing_tools.session.distance import ensure_distance
 from racing_tools.track.track import Track
 from racing_tools.track.visualize_track import plot_track
 from racing_tools.utils import check_cuda_availability
+from racing_tools.utils.generate_report import generate_report
 from racing_tools.utils.sync_ui import run_manual_lap_marking
 from racing_tools.video.ass import AssBuilder, emit_gauge_ass, emit_lap_stats_ass
 from racing_tools.video.pipeline import (
@@ -121,6 +122,14 @@ def main() -> int:
         output_vis_path = inp_path.parent / "track_visualization.png"
         plot_track(track=track, track_dir=Path(args.track_dir), output_path=output_vis_path)
         print(f"[Track] Visualization saved to: {output_vis_path}")
+
+        if args.telemetry:
+            report_out = inp_path.parent / f"{inp_path.stem}_report.png"
+            generate_report(
+                telemetry_path=Path(args.telemetry),
+                track_dir=Path(args.track_dir),
+                output_path=report_out,
+            )
 
     # --- Step 1: Always get video crossings via manual lap marking ---
     crossings_sidecar = VideoSidecar.load(Path(args.inp), "crossings")

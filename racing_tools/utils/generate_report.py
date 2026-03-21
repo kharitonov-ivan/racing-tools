@@ -13,7 +13,7 @@ from PIL import Image, ImageDraw, ImageFont
 from pyproj import Transformer
 
 from racing_tools.session.session import Session, WGS84_TO_WEBMERC
-from racing_tools.track import Track
+from racing_tools.track.track import Track
 
 
 def get_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
