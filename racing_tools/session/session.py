@@ -366,7 +366,10 @@ class Session:
         rpm_col = self._pick_column(["RPM", "Régime"])
 
         stats = []
-        for lap_id in sorted(self.table["LapNumber"].unique()):
+        all_lap_ids = sorted(self.table["LapNumber"].unique())
+        max_lap_id = max(all_lap_ids) if all_lap_ids else -1
+
+        for lap_id in all_lap_ids:
             lap_data = self.table[self.table["LapNumber"] == lap_id]
             if lap_data.empty:
                 continue
@@ -383,6 +386,10 @@ class Session:
                 "min_rpm": None,
                 "max_rpm": None,
             }
+            if int(lap_id) == 0:
+                stat["label"] = "POUT"
+            elif int(lap_id) == max_lap_id:
+                stat["label"] = "PIN"
             if speed_col:
                 s = pd.to_numeric(lap_data[speed_col], errors="coerce")
                 stat["min_speed"], stat["max_speed"] = s.min(), s.max()
