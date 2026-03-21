@@ -256,10 +256,22 @@ def main() -> int:
 
     ass_path = ass.write(Path(args.out).with_suffix(".ass"))
 
-    # Also write a source-video-time copy for verification (open source .mp4 + this .ass)
-    source_ass_path = Path(args.out).with_name(f"{Path(args.out).stem}_source.ass")
-    ass.write_with_offset(source_ass_path, time_offset=trim_start)
-    print(f"[ASS] Source-time copy for verification: {source_ass_path}")
+    # Generate source-video-time ASS (full timeline, for verification with source .mp4)
+    if args.telemetry and sync_mapping is not None:
+        source_session = VideoSession.from_session(session, Path(args.inp))
+        source_session.table = source_session.resample_to_video(
+            fps=video_info.fps,
+            trim_start=0.0,
+            duration=video_info.duration,
+            sync=sync_mapping,
+        )
+        source_session.crossings = list(crossings_video)
+
+        source_ass = AssBuilder(video_info.width, video_info.height)
+        emit_gauge_ass(source_ass, source_session)
+        source_ass_path = Path(args.out).with_name(f"{Path(args.out).stem}_source.ass")
+        source_ass.write(source_ass_path)
+        print(f"[ASS] Source-time ASS for verification: {source_ass_path}")
 
     pipeline = Pipeline(pipeline.video.filter("subtitles", filename=ass_path), pipeline.audio)
 
