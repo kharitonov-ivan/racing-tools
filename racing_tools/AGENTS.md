@@ -168,13 +168,31 @@ git checkout -b fix/short-description
 git add <files>
 git commit -m "fix: description of the fix"
 
-# 3. Merge back to main
+# 3. Sync with main via rebase (keep history linear)
+git fetch origin main
+git rebase origin/main
+
+# 4. Squash commits into logical units before merge
+git rebase -i origin/main
+# Mark commits to squash using 'squash' or 's' keyword
+
+# 5. Merge back to main
 git checkout main
 git merge fix/short-description
 
-# 4. Delete the branch
+# 6. Delete the branch
 git branch -d fix/short-description
 ```
+
+### Rebase Policy
+- Always rebase onto `main` before merging to keep history linear
+- Use `git rebase -i` to squash WIP/debugging commits into meaningful units
+- Never force-push to `main` or shared branches
+
+### Commit Squashing
+- Combine related commits (e.g., "fix bug", "address review" → "fix: resolve issue X")
+- Final merge commit should represent a complete, shippable change
+- Use meaningful commit messages: `type: description` format (fix:, feat:, refactor:, etc.)
 
 ## Development Notes
 
