@@ -255,6 +255,12 @@ def main() -> int:
         emit_gauge_ass(ass, video_session)
 
     ass_path = ass.write(Path(args.out).with_suffix(".ass"))
+
+    # Also write a source-video-time copy for verification (open source .mp4 + this .ass)
+    source_ass_path = Path(args.out).with_name(f"{Path(args.out).stem}_source.ass")
+    ass.write_with_offset(source_ass_path, time_offset=trim_start)
+    print(f"[ASS] Source-time copy for verification: {source_ass_path}")
+
     pipeline = Pipeline(pipeline.video.filter("subtitles", filename=ass_path), pipeline.audio)
 
     # Per-lap track map overlay
