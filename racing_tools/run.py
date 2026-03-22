@@ -74,7 +74,7 @@ def main() -> int:
     p.add_argument("--vcodec", default=None, help="output video codec (default: auto-detect)")
     p.add_argument("--preset", default="7", help="encoder preset (SVT-AV1: 0-13, NVENC: p1-p7)")
     p.add_argument("--crf", type=int, default=28, help="CRF/CQ for AV1 (lower=better, 20-35 recommended)")
-    p.add_argument("--resolution", type=int, default=None, help="Output resolution height (e.g. 720)")
+    p.add_argument("--resolution", type=int, default=720, help="Output resolution height (e.g. 720)")
 
     p.add_argument("--intrinsics", help="path to camera intrinsics CSV")
     p.add_argument("--no-interactive", action="store_true", help="skip interactive prompts")
