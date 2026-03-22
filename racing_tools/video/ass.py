@@ -1,9 +1,9 @@
 """ASS subtitle generation utilities for video overlays."""
 
+import atexit
 import os
 import re
 import tempfile
-import atexit
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -11,10 +11,11 @@ import numpy as np
 
 if TYPE_CHECKING:
     import pandas as pd
+
     from racing_tools.session.session import VideoSession
 
 from racing_tools.session.predictive import PredictiveLapModel
-from racing_tools.track.constants import DEFAULT_MAX_RPM, MIN_VALID_LAP_TIME, MAX_DELTA_FOR_DISPLAY
+from racing_tools.track.constants import DEFAULT_MAX_RPM, MAX_DELTA_FOR_DISPLAY, MIN_VALID_LAP_TIME
 from racing_tools.video.overlay import format_duration
 
 
@@ -164,10 +165,10 @@ def emit_lap_stats_ass(ass: AssBuilder, session: "VideoSession") -> None:
 
     margin_right = int(50 * scale_h)
     col_gap = int(20 * scale_h)
-    
+
     # Scale column widths
     scaled_columns = [(name, key, int(w * scale_h)) for name, key, w in columns]
-    
+
     total_width = sum(c[2] for c in scaled_columns) + col_gap * (len(scaled_columns) - 1)
     base_x = width - total_width - margin_right
     start_y = int(50 * scale_h)
@@ -278,7 +279,9 @@ def emit_gauge_ass(ass: AssBuilder, session: "VideoSession") -> None:
     ass.add_style(f"Style: DeltaTop1,Arial,{s60},&H000000FF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,0,0,8,10,10,10,1")  # Red (best)
     ass.add_style(f"Style: DeltaTop2,Arial,{s60},&H00FF8000,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,0,0,8,10,10,10,1")  # Blue (2nd)
     ass.add_style(f"Style: DeltaTop3,Arial,{s60},&H0000FFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,0,0,8,10,10,10,1")  # Green (3rd)
-    ass.add_style(f"Style: DeltaGray,Arial,{s40},&H00888888,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,0,0,8,10,10,10,1")  # Gray (other laps)
+    ass.add_style(
+        f"Style: DeltaGray,Arial,{s40},&H00888888,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,0,0,8,10,10,10,1"
+    )  # Gray (other laps)
     ass.add_style(
         f"Style: DeltaCurrent,Arial,{s60},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,0,0,8,10,10,10,1"
     )  # White (current)
@@ -341,6 +344,12 @@ def emit_gauge_ass(ass: AssBuilder, session: "VideoSession") -> None:
     speeds = session_table[speed_col].fillna(0).values
     rpms = session_table[rpm_col].fillna(0).values if rpm_col else np.zeros(len(session_table))
 
+    GAUGE_FPS, alpha = 10, 0.3
+    filtered_speeds, filtered_rpms = speeds.copy(), rpms.copy()
+    for i in range(1, len(speeds)):
+        filtered_speeds[i] = alpha * speeds[i] + (1 - alpha) * filtered_speeds[i - 1]
+        filtered_rpms[i] = alpha * rpms[i] + (1 - alpha) * filtered_rpms[i - 1]
+
     # Debug: check if values vary
     print(f"[gauge] speed_col={speed_col}, rpm_col={rpm_col}")
     print(f"[gauge] speeds shape={speeds.shape}, rpms shape={rpms.shape}")
@@ -362,19 +371,15 @@ def emit_gauge_ass(ass: AssBuilder, session: "VideoSession") -> None:
         s = t - m * 60
         return f"{m}:{s:06.3f}"
 
-    for i in range(total_frames):
+    interval = max(1, round(fps / GAUGE_FPS))
+    for i in range(0, total_frames, interval):
         t_start = i / fps
-        i_end = i + 1
-        t_end = i_end / fps
+        t_end = min((i + interval) / fps, total_frames / fps)
         s_str = fmt_ass_time(t_start)
         e_str = fmt_ass_time(t_end)
 
-        speed = speeds[i] if i < len(speeds) else 0
-        rpm = rpms[i] if i < len(rpms) else 0
-
-        # Debug: print first few frames
-        if i < 5:
-            print(f"[gauge] Frame {i}: speed={speed:.1f}, rpm={rpm:.0f}")
+        speed = filtered_speeds[i]
+        rpm = filtered_rpms[i]
 
         # RPM color
         if rpm < 7500:
@@ -388,11 +393,8 @@ def emit_gauge_ass(ass: AssBuilder, session: "VideoSession") -> None:
         filled = max(0, min(bar_len, int((rpm / max_rpm) * bar_len)))
         bar_text = "[" + "|" * filled + " " * (bar_len - filled) + "]"
 
-        text = f"{{\\c&H00FFFFFF&}}{int(speed):3d} km/h   {{\\c{rpm_color}&}}{bar_text}   {int(rpm):5d} RPM"
+        text = f"{{\\c&H00FFFFFF&}}{int(round(speed))} km/h   {{\\c{rpm_color}&}}{bar_text}   {int(round(rpm))} RPM"
         ass.add_event(f"Dialogue: 0,{s_str},{e_str},Gauge,,0,0,0,,{text}")
-        # Debug: print first few gauge events
-        if i < 3:
-            print(f"[gauge] Added Gauge event for frame {i}: {s_str}->{e_str}, text='{text}'")
 
         # Lap timer
         lap_elapsed = t_start
