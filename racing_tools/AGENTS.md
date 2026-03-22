@@ -7,71 +7,87 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Install dependencies: `uv sync`
 - Run scripts: `uv run python racing_tools/run.py --help`
 
+## Git Workflow
+For fixes and features, use a branch-based workflow:
+```bash
+git checkout -b fix/short-description
+git add <files>
+git commit -m "fix: desc"
+git fetch origin main
+git rebase origin/main
+
+# 4. Squash commits into logical units before merge
+git rebase -i origin/main
+# Mark commits to squash using 'squash' or 's' keyword
+# Always review code with separate agent on this point
+# Always run tests and run example to verify that everything works
+
+# 5. Merge back to main - Always ask user to review before merging
+git checkout main
+git merge fix/short-description
+git branch -d fix/short-description
+```
+
+### Rebase Policy
+- Always rebase onto `main` before merging (linear history)
+- Use `git rebase -i` to squash WIP commits
+- Never force-push to `main` or shared branches
+
+### Commit Squashing
+- Combine related commits. Final commit: complete, shippable change.
+- Format: `type: description` (`fix:`, `feat:`, `refactor:`)
+
+## Development Notes
+- CRS: WGS84 (GPS), Web Mercator (map), UTM (dist).
+- `session/channel_mapping.json` auto-applies scale/offset.
+- Video-telemetry sync: match lap crossings via interval pattern (RMSE min).
+- ASS subtitles preferred over PNG for performance.
+- HW acceleration: NVENC (CUDA) else CPU SVT-AV1.
+
 ## Code Style
-- Write modular functions (max 50 lines)
+- Modular functions (max 50 lines)
 - Prefer composition over inheritance
-- Use type hints for all function signatures
-- Keep files under 300 lines when possible
-- Follow PEP 8 conventions
-- Do not insert imports in functions
-- Do not use try except blocks when whis is not necessary
-- Use ruff format
+- Type hints for all signatures
+- Files under 300 lines
+- PEP 8, `ruff format`
+- No imports in functions
+- No unnecessary `try/except` blocks
 
 ## Project Overview
-
-Racing telemetry tools for processing, analyzing, and overlaying telemetry data from racing sessions. Supports multiple telemetry formats (AIM MyChron5, Alfano, MoTeC) and combines them with video footage.
+Telemetry tools processing, analyzing, overlaying (AIM, Alfano, MoTeC) with video.
 
 ### Core Architecture
-
-- **`session/`** - Telemetry data processing and normalization
-  - `session.py`: Core `Session` class that loads telemetry from various formats (AIM, Alfano, CSV)
-  - `predictive.py`: `PredictiveLapModel` for lap time prediction based on distance
-  - `convert.py`: CLI for converting telemetry formats to MoTeC .ld files
-  - `channel_mapping.json`: Channel name/units normalization for different devices
-
-- **`track/`** - Track geometry and mapping
-  - `track.py`: `Track` class for loading track boundaries, centerline, bestline from GeoJSON files
-  - `utils.py`: Track utility functions (normalize_angle, compute_centerline, etc.)
-  - `segmentation.py`: Track segmentation into straights/turns
-  - Supports WGS84 → Web Mercator and UTM projections for accurate distance calculations
-
-- **`run.py`** - Main video processing pipeline
-  - Fisheye undistortion using camera calibration
-  - Video stabilization (vid.stab)
-  - Telemetry synchronization (piecewise linear mapping via lap crossings)
-  - ASS subtitle generation for gauges, track map, lap stats
-  - Hardware-accelerated encoding (NVENC/AV1)
-
-- **`camera/`** - Camera calibration utilities (checkerboard calibration, fisheye model)
-
-- **`video/`** - Video processing utilities
-  - `undistort.py`, `trim.py`, `transcode.py`, `split.py`: Video manipulation tools
-  - `stab.py`: Video stabilization using vidstab filters
-  - `overlay.py`: Overlay rendering functions (track map, gauges)
-  - `ass.py`: ASS subtitle generation for video overlays
-  - `video_info.py`: Video metadata probing
+- **`session/`** - Telemetry & normalization
+  - `session.py`: `Session` loads AIM/Alfano/CSV.
+  - `predictive.py`: `PredictiveLapModel` (dist-based predict).
+  - `convert.py`: CLI MoTeC exporter.
+  - `channel_mapping.json`: Normalization.
+- **`track/`** - Geometry & mapping
+  - `track.py`: `Track` (GeoJSON loading).
+  - `utils.py`, `segmentation.py`: Utils.
+  - WGS84 → Mercator/UTM projections.
+- **`run.py`** - Video processing pipeline
+  - Fisheye undistort, vid.stab, syn matching crossings, ASS overlays, NVENC/AV1.
+- **`camera/`** - Checkerboard calibration, fisheye model.
+- **`video/`** - Processing utilities
+  - `undistort.py`, `trim.py`, `transcode.py`, `split.py`, `stab.py`, `overlay.py`, `ass.py`, `video_info.py`.
 
 ### Telemetry Processing Pipeline
-
-1. Load telemetry: `Session.load(path)` auto-detects format (AIM/Alfano)
-2. Normalize channels via `channel_mapping.json` (applies scale/offset transforms)
-3. Compute lap crossings from GPS track or existing Lap column
-4. Build `PiecewiseSync` mapping from video crossings to telemetry crossings
-5. Resample telemetry to video frame timestamps via `VideoSession.resample_to_video()`
+1. `Session.load(path)` (AIM/Alfano)
+2. Normalize via `channel_mapping.json`
+3. Compute lap crossings (GPS track or Lap col)
+4. Build `PiecewiseSync` (video crossings -> telemetry crossings)
+5. `VideoSession.resample_to_video()`
 
 ### Session Data Model
-
-- `Session.table`: pandas DataFrame with normalized telemetry
-- Required columns: `Time`, `Distance`, `LapNumber`
-- Speed columns: `GPS Speed` (km/h), `Wheel Speed` (km/h)
+- `Session.table`: pandas DataFrame
+- Required cols: `Time`, `Distance`, `LapNumber`
+- Speed cols: `GPS Speed`, `Wheel Speed` (km/h)
 - GPS: `GPS Latitude`, `GPS Longitude` (WGS84 deg)
 
 ### Track Directory Structure
-
-Track data lives inside the package at `racing_tools/track/data/`.
-
-```
-racing_tools/track/data/RIMSportKarting/
+```text
+racing_tools/track/data/<Name>/
 ├── geometry/
 │   ├── track-inner.geojson           # Inner track boundary (required)
 │   ├── track-outer.geojson           # Outer track boundary (required)
@@ -87,117 +103,35 @@ racing_tools/track/data/RIMSportKarting/
 ## Common Commands
 
 ### Convert telemetry to MoTeC format
-
 ```bash
-# Single session
-uv run python racing_tools/session/convert.py aim path/to/session_folder
-
-# Batch process entire directory
-uv run python racing_tools/session/convert.py batch path/to/logs
-
-# Alfano Excel export
-uv run python racing_tools/session/convert.py alfano-excel path/to/alfano_excel
+uv run python racing_tools/session/convert.py aim <session_folder>
+uv run python racing_tools/session/convert.py batch <logs_dir>
+uv run python racing_tools/session/convert.py alfano-excel <alfano_excel>
 ```
 
 ### Generate video with telemetry overlay
-
 ```bash
-# Full pipeline with telemetry sync
-uv run python racing_tools/run.py \
-  --in input_video.mp4 \
-  --telemetry path/to/telemetry_folder \
-  --track-dir racing_tools/track/data/RIMSportKarting \
-  --out output.mp4
-
-# Telemetry-only mode (no video)
-uv run python racing_tools/run.py \
-  --telemetry path/to/telemetry_folder \
-  --track-dir racing_tools/track/data/RIMSportKarting
+uv run python racing_tools/run.py --in in.mp4 --telemetry <tel_dir> --track-dir <track_dir> --out output.mp4
+uv run python racing_tools/run.py --telemetry <tel_dir> --track-dir <track_dir> # telemetry-only
 ```
 
 ### Video utilities
-
 ```bash
-# Trim video (interactive mode)
-uv run python racing_tools/video/trim.py input.mp4
-
-# Transcode to AV1 with NVENC
-uv run python racing_tools/video/transcode.py input.mp4 -o output.mp4
-
-# Split video by laps
-uv run python racing_tools/video/split.py input.mp4 --crossings 10.5 25.3 40.1
+uv run python racing_tools/video/trim.py in.mp4
+uv run python racing_tools/video/transcode.py in.mp4 -o out.mp4
+uv run python racing_tools/video/split.py in.mp4 --crossings 10.5 25.3
 ```
 
 ### Camera calibration
-
 ```bash
-# Find camera intrinsics from checkerboard images
-uv run python racing_tools/camera/find_intrinsics.py path/to/checkboard_images/
-
-# Undistort images using calibration
-uv run python racing_tools/camera/undistort.py --intrinsics camera.csv input.jpg
+uv run python racing_tools/camera/find_intrinsics.py <imgs_dir>
+uv run python racing_tools/camera/undistort.py --intrinsics cam.csv in.jpg
 ```
 
 ## Testing
-
-Test data is located in `data/test/`. Create 10-second clips from the middle of videos for testing:
-
+`data/test/` clips for testing:
 ```bash
-# Create test clip from middle of video (e.g., at 387 seconds of 784s video)
-ffmpeg -y -i data/17-03-2026/17-23/2026-03-17_17-23-13.mp4 -ss 387 -t 10 -c copy data/test/test_10sec.mp4
-
-# Test undistortion
-uv run python racing_tools/video/undistort.py \
-  data/test/test_10sec.mp4 \
-  racing_tools/camera/intrinsics_fisheye.csv \
-  --output data/test/test_undistorted.mp4
-
-# Test stabilization
-uv run python racing_tools/video/stab.py data/test/test_10sec.mp4 --overwrite
+ffmpeg -y -i data/<vid> -ss 387 -t 10 -c copy data/test/10s.mp4
+uv run python racing_tools/video/undistort.py data/test/10s.mp4 <cam.csv> --output out.mp4
+uv run python racing_tools/video/stab.py data/test/10s.mp4 --overwrite
 ```
-
-## Git Workflow
-
-For fixes and features, use a branch-based workflow:
-
-```bash
-# 1. Create a feature/fix branch from main
-git checkout -b fix/short-description
-
-# 2. Make changes, commit
-git add <files>
-git commit -m "fix: description of the fix"
-
-# 3. Sync with main via rebase (keep history linear)
-git fetch origin main
-git rebase origin/main
-
-# 4. Squash commits into logical units before merge
-git rebase -i origin/main
-# Mark commits to squash using 'squash' or 's' keyword
-
-# 5. Merge back to main
-git checkout main
-git merge fix/short-description
-
-# 6. Delete the branch
-git branch -d fix/short-description
-```
-
-### Rebase Policy
-- Always rebase onto `main` before merging to keep history linear
-- Use `git rebase -i` to squash WIP/debugging commits into meaningful units
-- Never force-push to `main` or shared branches
-
-### Commit Squashing
-- Combine related commits (e.g., "fix bug", "address review" → "fix: resolve issue X")
-- Final merge commit should represent a complete, shippable change
-- Use meaningful commit messages: `type: description` format (fix:, feat:, refactor:, etc.)
-
-## Development Notes
-
-- Coordinate reference systems: WGS84 for GPS, Web Mercator for mapping, UTM for accurate distance
-- Channel mappings in `session/channel_mapping.json` apply scale/offset transforms automatically
-- Video-telemetry sync uses lap crossing times matched by interval pattern (RMSE minimization)
-- ASS subtitles are preferred over per-frame PNG rendering for performance
-- Hardware acceleration auto-detected: NVENC if CUDA available, else CPU SVT-AV1
