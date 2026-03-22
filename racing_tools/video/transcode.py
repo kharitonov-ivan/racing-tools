@@ -18,6 +18,9 @@ Usage:
 
     # No audio (video only)
     python racing_tools/transcode.py video.mp4 --no-audio
+
+    # Scale to 720p
+    python racing_tools/transcode.py video.mp4 --resolution 720
 """
 
 from __future__ import annotations
@@ -164,6 +167,7 @@ def build_ffmpeg_command(
     no_audio: bool,
     bitrate: str,
     maxrate: str,
+    resolution: int | None = None,
 ) -> list[str]:
     """Build complete ffmpeg command line arguments."""
     hwaccel_args = ["-hwaccel", "cuda"] if "nvenc" in codec else []
@@ -176,8 +180,13 @@ def build_ffmpeg_command(
         "-v", "error",
         "-stats",
         "-i", str(input_path),
-        *video_args,
     ]
+
+    # Add scale filter if resolution specified
+    if resolution:
+        cmd.extend(["-vf", f"scale=-1:{resolution}"])
+
+    cmd.extend(video_args)
 
     if not no_audio:
         cmd.extend(["-c:a", "libopus", "-b:a", "192k"])
@@ -198,6 +207,7 @@ def transcode_file(
     no_audio: bool = False,
     bitrate: str = "15M",
     maxrate: str = "20M",
+    resolution: int | None = None,
 ) -> bool:
     """Transcode a single file using ffmpeg."""
     if output_path.exists() and not overwrite:
@@ -208,7 +218,7 @@ def transcode_file(
 
     cmd = build_ffmpeg_command(
         input_path, output_path, codec, cq, preset,
-        overwrite, no_audio, bitrate, maxrate
+        overwrite, no_audio, bitrate, maxrate, resolution
     )
 
     try:
@@ -246,6 +256,7 @@ def transcode_single_file(args) -> bool:
         no_audio=args.no_audio,
         bitrate=args.bitrate,
         maxrate=args.maxrate,
+        resolution=args.resolution,
     )
     print("-" * 40)
     print("Done." if success else "Failed.")
@@ -294,6 +305,7 @@ def transcode_multiple_files(args) -> int:
             no_audio=args.no_audio,
             bitrate=args.bitrate,
             maxrate=args.maxrate,
+            resolution=args.resolution,
         ):
             success_count += 1
 
@@ -340,6 +352,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing output files.")
     parser.add_argument("--no-audio", action="store_true", help="Discard audio stream.")
     parser.add_argument("--recursive", action="store_true", help="Process files in subdirectories recursively (folder mode only).")
+    parser.add_argument(
+        "--resolution",
+        type=int,
+        default=None,
+        help="Output height in pixels (e.g., 1080, 720). Width auto-calculated to maintain aspect ratio.",
+    )
 
     return parser.parse_args()
 
