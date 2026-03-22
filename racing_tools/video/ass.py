@@ -137,15 +137,19 @@ def emit_lap_stats_ass(ass: AssBuilder, session: "VideoSession") -> None:
     if not lap_stats:
         return
 
+    scale_h = session.info.height / 1080.0
+    s20 = max(12, int(20 * scale_h))
+    s24 = max(14, int(24 * scale_h))
+
     # Styles
-    ass.add_style("Style: Header,Arial,20,&H00AAAAAA,&H000000FF,&H00000000,&H60000000,1,0,0,0,100,100,0,0,1,1,1,7,10,10,10,1")
-    ass.add_style("Style: Row,Arial,24,&H00FFFFFF,&H000000FF,&H00000000,&H60000000,1,0,0,0,100,100,0,0,1,1,1,7,10,10,10,1")
-    ass.add_style("Style: RowGold,Arial,24,&H0000D7FF,&H000000FF,&H00000000,&H60000000,1,0,0,0,100,100,0,0,1,1,1,7,10,10,10,1")
-    ass.add_style("Style: RowPit,Arial,24,&H00887766,&H000000FF,&H00000000,&H60000000,0,0,0,0,100,100,0,0,1,1,1,7,10,10,10,1")
+    ass.add_style(f"Style: Header,Arial,{s20},&H00AAAAAA,&H000000FF,&H00000000,&H60000000,1,0,0,0,100,100,0,0,1,1,1,7,10,10,10,1")
+    ass.add_style(f"Style: Row,Arial,{s24},&H00FFFFFF,&H000000FF,&H00000000,&H60000000,1,0,0,0,100,100,0,0,1,1,1,7,10,10,10,1")
+    ass.add_style(f"Style: RowGold,Arial,{s24},&H0000D7FF,&H000000FF,&H00000000,&H60000000,1,0,0,0,100,100,0,0,1,1,1,7,10,10,10,1")
+    ass.add_style(f"Style: RowPit,Arial,{s24},&H00887766,&H000000FF,&H00000000,&H60000000,0,0,0,0,100,100,0,0,1,1,1,7,10,10,10,1")
     # Top-3 lap styles (ASS uses BGR colors)
-    ass.add_style("Style: RowRed,Arial,24,&H000000FF,&H000000FF,&H00000000,&H60000000,1,0,0,0,100,100,0,0,1,1,1,7,10,10,10,1")  # Best (red)
-    ass.add_style("Style: RowBlue,Arial,24,&H00FF8000,&H000000FF,&H00000000,&H60000000,1,0,0,0,100,100,0,0,1,1,1,7,10,10,10,1")  # 2nd (blue)
-    ass.add_style("Style: RowGreen,Arial,24,&H0000FFFF,&H000000FF,&H00000000,&H60000000,1,0,0,0,100,100,0,0,1,1,1,7,10,10,10,1")  # 3rd (green)
+    ass.add_style(f"Style: RowRed,Arial,{s24},&H000000FF,&H000000FF,&H00000000,&H60000000,1,0,0,0,100,100,0,0,1,1,1,7,10,10,10,1")  # Best (red)
+    ass.add_style(f"Style: RowBlue,Arial,{s24},&H00FF8000,&H000000FF,&H00000000,&H60000000,1,0,0,0,100,100,0,0,1,1,1,7,10,10,10,1")  # 2nd (blue)
+    ass.add_style(f"Style: RowGreen,Arial,{s24},&H0000FFFF,&H000000FF,&H00000000,&H60000000,1,0,0,0,100,100,0,0,1,1,1,7,10,10,10,1")  # 3rd (green)
 
     # Build columns dynamically
     sample = lap_stats[0]
@@ -158,16 +162,20 @@ def emit_lap_stats_ass(ass: AssBuilder, session: "VideoSession") -> None:
         if value is not None:
             columns.append((key.replace("_", " ").title(), key, 100))
 
-    margin_right = 50
-    col_gap = 20
-    total_width = sum(c[2] for c in columns) + col_gap * (len(columns) - 1)
+    margin_right = int(50 * scale_h)
+    col_gap = int(20 * scale_h)
+    
+    # Scale column widths
+    scaled_columns = [(name, key, int(w * scale_h)) for name, key, w in columns]
+    
+    total_width = sum(c[2] for c in scaled_columns) + col_gap * (len(scaled_columns) - 1)
     base_x = width - total_width - margin_right
-    start_y = 50
-    row_h = 40
+    start_y = int(50 * scale_h)
+    row_h = int(40 * scale_h)
 
     col_positions: list[int] = []
     x = 0
-    for _, _, w in columns:
+    for _, _, w in scaled_columns:
         col_positions.append(x)
         x += w + col_gap
 
@@ -181,11 +189,11 @@ def emit_lap_stats_ass(ass: AssBuilder, session: "VideoSession") -> None:
     top3_rank_table = {lap_id: i + 1 for i, lap_id in enumerate(top3_ids_table)}
 
     # Header row (static, full duration)
-    for i, (header, _, _) in enumerate(columns):
+    for i, (header, _, _) in enumerate(scaled_columns):
         x_pos = base_x + col_positions[i]
         ass.add_event(f"Dialogue: 0,0:00:00.00,99:59:59.99,Header,,0,0,0,,{{\\pos({x_pos},{start_y})}}{header}")
 
-    data_start_y = start_y + 40
+    data_start_y = start_y + int(40 * scale_h)
 
     # Data rows (static)
     for row_idx, s in enumerate(sorted_stats):
@@ -206,7 +214,7 @@ def emit_lap_stats_ass(ass: AssBuilder, session: "VideoSession") -> None:
             style = "Row"
         common = f"Dialogue: 0,0:00:00.00,99:59:59.99,{style},,0,0,0,,"
 
-        for col_idx, (_, key, _) in enumerate(columns):
+        for col_idx, (_, key, _) in enumerate(scaled_columns):
             x_pos = base_x + col_positions[col_idx]
             value = s.get(key)
             if key == "id":
@@ -233,7 +241,7 @@ def emit_lap_stats_ass(ass: AssBuilder, session: "VideoSession") -> None:
         idx = next((j for j, s in enumerate(sorted_stats) if s["id"] == i), -1)
         if idx != -1:
             y_pos = data_start_y + idx * row_h
-            ptr_x = base_x - 30
+            ptr_x = base_x - int(30 * scale_h)
             ass.add_event(f"Dialogue: 1,{fmt_ass_time(range_start)},{fmt_ass_time(range_end)},Row,,0,0,0,,{{\\pos({ptr_x},{y_pos})}}>")
 
 
@@ -254,21 +262,29 @@ def emit_gauge_ass(ass: AssBuilder, session: "VideoSession") -> None:
     rpm_col = next((n for n in ["RPM", "Engine RPM"] if n in session_table.columns), None)
 
     # Styles
-    ass.add_style("Style: Gauge,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&H60000000,1,0,0,0,100,100,0,0,3,0,0,2,10,10,50,1")
-    ass.add_style("Style: LapTimer,Arial,36,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,0,0,1,10,10,100,1")
+    scale_h = session.info.height / 1080.0
+    scale_h = session.info.height / 1080.0
+    s24 = max(14, int(24 * scale_h))
+    s36 = max(18, int(36 * scale_h))
+    s40 = max(20, int(40 * scale_h))
+    s48 = max(24, int(48 * scale_h))
+    s60 = max(30, int(60 * scale_h))
+
+    ass.add_style(f"Style: Gauge,Arial,{s48},&H00FFFFFF,&H000000FF,&H00000000,&H60000000,1,0,0,0,100,100,0,0,3,0,0,2,10,10,50,1")
+    ass.add_style(f"Style: LapTimer,Arial,{s36},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,0,0,1,10,10,100,1")
 
     # Alfano-style delta styles (ASS uses BGR colors) - larger fonts
-    ass.add_style("Style: DeltaLine,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,0,0,8,10,10,10,1")
-    ass.add_style("Style: DeltaTop1,Arial,60,&H000000FF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,0,0,8,10,10,10,1")  # Red (best)
-    ass.add_style("Style: DeltaTop2,Arial,60,&H00FF8000,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,0,0,8,10,10,10,1")  # Blue (2nd)
-    ass.add_style("Style: DeltaTop3,Arial,60,&H0000FFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,0,0,8,10,10,10,1")  # Green (3rd)
-    ass.add_style("Style: DeltaGray,Arial,40,&H00888888,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,0,0,8,10,10,10,1")  # Gray (other laps)
+    ass.add_style(f"Style: DeltaLine,Arial,{s48},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,0,0,8,10,10,10,1")
+    ass.add_style(f"Style: DeltaTop1,Arial,{s60},&H000000FF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,0,0,8,10,10,10,1")  # Red (best)
+    ass.add_style(f"Style: DeltaTop2,Arial,{s60},&H00FF8000,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,0,0,8,10,10,10,1")  # Blue (2nd)
+    ass.add_style(f"Style: DeltaTop3,Arial,{s60},&H0000FFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,0,0,8,10,10,10,1")  # Green (3rd)
+    ass.add_style(f"Style: DeltaGray,Arial,{s40},&H00888888,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,0,0,8,10,10,10,1")  # Gray (other laps)
     ass.add_style(
-        "Style: DeltaCurrent,Arial,60,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,0,0,8,10,10,10,1"
+        f"Style: DeltaCurrent,Arial,{s60},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,0,0,8,10,10,10,1"
     )  # White (current)
-    ass.add_style("Style: DeltaLabel,Arial,36,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,0,0,8,10,10,10,1")
+    ass.add_style(f"Style: DeltaLabel,Arial,{s36},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,0,0,8,10,10,10,1")
     ass.add_style(
-        "Style: DeltaLapNum,Arial,24,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,0,0,8,10,10,10,1"
+        f"Style: DeltaLapNum,Arial,{s24},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,0,0,8,10,10,10,1"
     )  # Smaller font for lap numbers
 
     # Build predictive models for ALL laps (Alfano-style)
@@ -310,13 +326,13 @@ def emit_gauge_ass(ass: AssBuilder, session: "VideoSession") -> None:
     print(f"[gauge] Top-3 laps: {[(lid, f'{t:.3f}s') for lid, t in top3_sorted]}")
 
     # Alfano delta parameters
-    bar_width = min(3000, int(width * 0.9))
+    bar_width = min(int(3000 * scale_h), int(width * 0.9))
     scale_sec = 3.0
     center_x = width // 2
     line_y = height * 2 // 3  # Lower position (bottom third of screen)
-    cars_y = line_y + 50
-    lap_num_y = cars_y - 50  # Lap number above the bar (smaller font)
-    label_y = cars_y + 40
+    cars_y = line_y + int(50 * scale_h)
+    lap_num_y = cars_y - int(50 * scale_h)  # Lap number above the bar (smaller font)
+    label_y = cars_y + int(40 * scale_h)
 
     def delta_to_x(delta: float) -> float:
         clamped = max(-scale_sec, min(scale_sec, delta))

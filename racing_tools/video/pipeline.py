@@ -37,6 +37,10 @@ def build_trimer(pipe: Pipeline, ss: float, to: float) -> Pipeline:
     )
 
 
+def build_scaler(pipe: Pipeline, width: int, height: int) -> Pipeline:
+    v = pipe.video.filter("scale", width, height)
+    return Pipeline(v, pipe.audio)
+
 def _load_remap_stream(path: Path, fps: float) -> ffmpeg.Stream:
     """Load a PGM remap file as a looped FFmpeg stream."""
     return ffmpeg.input(str(path), loop=1, framerate=fps).video.filter("setpts", "PTS-STARTPTS")
@@ -120,9 +124,10 @@ def build_per_lap_track_maps(
     x_range = max_x - min_x or 1
     y_range = max_y - min_y or 1
 
-    map_w, map_h = 600, 600
-    map_x, map_y = 30, 30
-    padding = 20
+    scale = height / 1080.0
+    map_w, map_h = int(600 * scale), int(600 * scale)
+    map_x, map_y = int(30 * scale), int(30 * scale)
+    padding = int(20 * scale)
 
     img = Image.new("RGBA", (map_w, map_h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
@@ -131,7 +136,7 @@ def build_per_lap_track_maps(
         norm_poly = [((p[0] - min_x) / x_range, 1.0 - (p[1] - min_y) / y_range) for p in poly]
         scaled = [(padding + p[0] * (map_w - 2 * padding), padding + p[1] * (map_h - 2 * padding)) for p in norm_poly]
         if len(scaled) > 1:
-            draw.line(scaled, fill="#888888", width=4)
+            draw.line(scaled, fill="#888888", width=max(2, int(4 * scale)))
 
     sector_colors = ["#FF6B6B", "#4ECDC4", "#45B7D1", "#96CEB4", "#FFEAA7", "#DDA0DD", "#98D8C8", "#F7DC6F"]
     for idx, sector in enumerate(sectors):
@@ -144,7 +149,7 @@ def build_per_lap_track_maps(
             sy = padding + norm_y * (map_h - 2 * padding)
 
             color = sector_colors[idx % len(sector_colors)]
-            r = 6
+            r = max(3, int(6 * scale))
             draw.ellipse([(sx - r, sy - r), (sx + r, sy + r)], fill=color, outline="#000000")
 
     fd, static_track_path = tempfile.mkstemp(suffix="_track.png")
@@ -169,6 +174,9 @@ def build_per_lap_track_maps(
     fd_ass, stats_ass_path = tempfile.mkstemp(suffix="_track_stats.ass")
     os.close(fd_ass)
 
+    font_stat = max(10, int(14 * scale))
+    font_label = max(14, int(20 * scale))
+
     ass_header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {width}
@@ -176,8 +184,8 @@ PlayResY: {height}
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: TrackStat,DejaVu Sans,14,&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,2,0,5,0,0,0,1
-Style: LapLabel,DejaVu Sans,20,&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,2,0,5,0,0,0,1
+Style: TrackStat,DejaVu Sans,{font_stat},&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,2,0,5,0,0,0,1
+Style: LapLabel,DejaVu Sans,{font_label},&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,2,0,5,0,0,0,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text

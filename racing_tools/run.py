@@ -28,6 +28,7 @@ from racing_tools.video.pipeline import (
     build_opener,
     build_per_lap_track_maps,
     build_stabilizer,
+    build_scaler,
     build_trimer,
     build_transform_estimator,
     build_undistorter,
@@ -73,6 +74,7 @@ def main() -> int:
     p.add_argument("--vcodec", default=None, help="output video codec (default: auto-detect)")
     p.add_argument("--preset", default="7", help="encoder preset (SVT-AV1: 0-13, NVENC: p1-p7)")
     p.add_argument("--crf", type=int, default=28, help="CRF/CQ for AV1 (lower=better, 20-35 recommended)")
+    p.add_argument("--resolution", type=int, default=None, help="Output resolution height (e.g. 720)")
 
     p.add_argument("--intrinsics", help="path to camera intrinsics CSV")
     p.add_argument("--no-interactive", action="store_true", help="skip interactive prompts")
@@ -113,6 +115,15 @@ def main() -> int:
         args.out = str(inp_path.with_name(f"{inp_path.stem}_output{inp_path.suffix}"))
 
     video_info = probe_video(Path(args.inp))
+
+    if args.resolution and video_info.height != args.resolution:
+        scale_factor = args.resolution / video_info.height
+        new_width = int(video_info.width * scale_factor)
+        if new_width % 2 != 0:
+            new_width += 1
+        print(f"[Scale] Rescaling video from {video_info.width}x{video_info.height} to {new_width}x{args.resolution}")
+        video_info.width = new_width
+        video_info.height = args.resolution
 
     session, track = None, None
 
@@ -199,6 +210,7 @@ def main() -> int:
 
     # --- Step 3: Build video session and resample ---
     video_session = VideoSession.from_session(session, Path(args.inp))
+    video_session._video_info = video_info
 
     if args.telemetry and sync_mapping is not None:
         video_session.table = video_session.resample_to_video(
@@ -224,7 +236,7 @@ def main() -> int:
         emit_gauge_ass(ass, video_session)
 
     # Write canonical ASS in source-video time (user opens this with source .mp4)
-    ass_path = ass.write(Path(args.out).with_suffix(".ass"))
+    ass_path = ass.write(Path(args.inp).with_suffix(".ass"))
 
     # Derive trimmed ASS for the ffmpeg pipeline (timestamps shifted by -trim_start)
     trimmed_ass_path = Path(args.out).with_name(f"{Path(args.out).stem}_trimmed.ass")
@@ -233,6 +245,8 @@ def main() -> int:
     # --- Build ffmpeg pipeline: trim first, then trimmed subtitles ---
     pipeline = build_opener(Path(args.inp), hwaccel=hwaccel)
     pipeline = build_trimer(pipeline, trim_start, trim_end)
+    if getattr(args, "resolution", None):
+        pipeline = build_scaler(pipeline, video_info.width, video_info.height)
     pipeline = Pipeline(pipeline.video.filter("subtitles", filename=str(trimmed_ass_path)), pipeline.audio)
 
     if args.intrinsics:
