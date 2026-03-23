@@ -47,12 +47,20 @@ def run_interactive_sync(video_path, crossings, fps=None, duration=None):
     cv2.resizeWindow(window_name, 1280, 720)
     
     final_shift = None
-    
+    last_valid_frame = None  # Store last successfully read frame
+
     while True:
         cap.set(cv2.CAP_PROP_POS_FRAMES, current_frame)
         ret, frame = cap.read()
         if not ret:
-            break
+            # Show last valid frame instead of closing
+            if last_valid_frame is not None:
+                frame = last_valid_frame.copy()
+            else:
+                # No valid frame ever read, exit
+                break
+        else:
+            last_valid_frame = frame.copy()
             
         video_time = current_frame / fps
         telemetry_time = crossings[current_lap_idx]
@@ -202,12 +210,20 @@ def run_manual_lap_marking(video_path, start_time: float = 0.0):
     cv2.resizeWindow(window_name, 1280, 720)
     
     result = None
-    
+    last_valid_frame = None  # Store last successfully read frame
+
     while True:
         cap.set(cv2.CAP_PROP_POS_FRAMES, current_frame)
         ret, frame = cap.read()
         if not ret:
-            break
+            # Show last valid frame instead of closing
+            if last_valid_frame is not None:
+                frame = last_valid_frame.copy()
+            else:
+                # No valid frame ever read, exit
+                break
+        else:
+            last_valid_frame = frame.copy()
             
         video_time = current_frame / fps
         
