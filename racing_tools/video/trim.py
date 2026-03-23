@@ -246,7 +246,7 @@ def main():
     print(f"Running ffmpeg from {info.start:.3f} with duration {duration:.3f}")
 
     try:
-        (ffmpeg.input(str(video_path), ss=info.start, t=duration).output(str(output_path), c="copy", map="0").overwrite_output().run())
+        (ffmpeg.input(str(video_path), ss=info.start, t=duration).output(str(output_path), c="copy", map="0", dn=None).overwrite_output().run())
         print(f"Trim successful!\n{output_path}")
     except ffmpeg.Error as e:
         sys.exit(f"Error running ffmpeg: {e}")
