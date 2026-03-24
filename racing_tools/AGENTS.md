@@ -111,8 +111,8 @@ uv run python racing_tools/session/convert.py alfano-excel <alfano_excel>
 
 ### Generate video with telemetry overlay
 ```bash
-uv run python racing_tools/run.py --in in.mp4 --telemetry <tel_dir> --track-dir <track_dir> --out output.mp4
-uv run python racing_tools/run.py --telemetry <tel_dir> --track-dir <track_dir> # telemetry-only
+uv run python racing_tools/run.py --in in.mp4 --telemetry <tel_dir> --track <track_dir> --out output.mp4
+uv run python racing_tools/run.py --telemetry <tel_dir> --track <track_dir> # telemetry-only
 ```
 
 ### Video utilities

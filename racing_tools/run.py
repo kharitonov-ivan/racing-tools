@@ -45,7 +45,7 @@ def main() -> int:
     p.add_argument("--in", dest="inp", required=True, help="input video path")
     p.add_argument("--out", dest="out", help="output video path")
     p.add_argument("--telemetry", dest="telemetry", default=None, help="path to telemetry session")
-    p.add_argument("--track_dir", dest="track_dir", default=None, help="path to track directory")
+    p.add_argument("--track", dest="track_dir", default=None, help="path to track directory")
     p.add_argument(
         "--overlay",
         default=None,

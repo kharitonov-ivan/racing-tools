@@ -15,13 +15,13 @@ It combines video footage with telemetry data (MyChron5, Alfano, etc.) to create
 
 The tool uses `uv` to manage dependencies. Run it from the repository root:
 
-uv run --project converter python render/overlay.py --video path/to/video.mp4 --telemetry path/to/telemetry_folder --track-dir racing_tools/track/data/YourTrack --output output_video.mp4
+uv run --project converter python render/overlay.py --video path/to/video.mp4 --telemetry path/to/telemetry_folder --track racing_tools/track/data/YourTrack --output output_video.mp4
 ```
 
 ### Example
 
 ```bash
-uv run --project converter python render/overlay.py --video render/session-01.mp4 --telemetry data/telemetry/2025-11-18-mychron5-RIMSportKarting-RotaxMax-KharitonovIvan-session-01 --track-dir racing_tools/track/data/RIMSportKarting --start 60 --duration 30 --time-shift 1.5 --output render/overlay_output.mp4
+uv run --project converter python render/overlay.py --video render/session-01.mp4 --telemetry data/telemetry/2025-11-18-mychron5-RIMSportKarting-RotaxMax-KharitonovIvan-session-01 --track racing_tools/track/data/RIMSportKarting --start 60 --duration 30 --time-shift 1.5 --output render/overlay_output.mp4
 
 ## Arguments
 
@@ -33,14 +33,14 @@ uv run --project converter python render/overlay.py --video render/session-01.mp
 | `--start` | Start time in seconds | `0.0` |
 | `--duration` | Duration to process in seconds | `Full video` |
 | `--time-shift` | Time offset (seconds) to sync telemetry | `0.0` |
-| `--track-dir` | Directory containing track GeoJSON files | `racing_tools/track/data/RIMSportKarting` |
+| `--track` | Directory containing track GeoJSON files | `racing_tools/track/data/RIMSportKarting` |
 | `--hwaccel-cuda` | Enable CUDA hardware acceleration (Auto-enabled if NVIDIA GPU detected) | `Auto` |
 | `--video-codec` | Video codec (e.g., `libx264`, `h264_nvenc`) | `h264_nvenc` (if CUDA) else `libx264` |
 | `--keep-frames` | Keep intermediate PNG frames | `False` |
 
 ## Track Maps
 
-To enable the track map and lap timer, provide a `--track-dir` containing a `geometry/` subdirectory with:
+To enable the track map and lap timer, provide a `--track` containing a `geometry/` subdirectory with:
 - `geometry/track-inner.geojson`: Inner track boundary (required)
 - `geometry/track-outer.geojson`: Outer track boundary (required)
 - `geometry/start-finish.geojson`: Start/finish line for lap timing (optional)

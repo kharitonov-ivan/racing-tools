@@ -509,7 +509,7 @@ def generate_report(
 def main() -> int:
     p = argparse.ArgumentParser(description="Generate PNG report with track map and lap statistics")
     p.add_argument("--telemetry", required=True, help="Path to telemetry file (.xrk, .csv, etc.)")
-    p.add_argument("--track_dir", required=True, help="Path to track directory")
+    p.add_argument("--track", dest="track_dir", required=True, help="Path to track directory")
     p.add_argument("--out", default="report.png", help="Output PNG path")
     args = p.parse_args()
 
