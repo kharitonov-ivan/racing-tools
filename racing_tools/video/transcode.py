@@ -30,13 +30,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-try:
-    from tqdm import tqdm
-except ImportError:
-
-    def tqdm(iterable, **kwargs):
-        return iterable
-
+from tqdm import tqdm
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi", ".ts", ".m4v"}
 
@@ -63,42 +57,72 @@ def get_video_files(input_dir: Path, recursive: bool = False) -> list[Path]:
 def build_av1_nvenc_args(cq: int, preset: str, bitrate: str, maxrate: str) -> list[str]:
     """Build ffmpeg arguments for AV1 NVENC encoder."""
     return [
-        "-preset", preset,
-        "-tune", "hq",
-        "-rc", "vbr",
-        "-cq", str(cq),
-        "-b:v", bitrate,
-        "-maxrate:v", maxrate,
-        "-bufsize:v", NVENC_BUFSIZE,
-        "-multipass", "fullres",
-        "-rc-lookahead", str(NVENC_LOOKAHEAD),
-        "-spatial_aq", "1",
-        "-temporal_aq", "1",
-        "-aq-strength", str(NVENC_AQ_STRENGTH),
-        "-bf", str(NVENC_B_FRAMES),
-        "-g", str(NVENC_GOP_SIZE),
-        "-pix_fmt", "yuv420p10le",
+        "-preset",
+        preset,
+        "-tune",
+        "hq",
+        "-rc",
+        "vbr",
+        "-cq",
+        str(cq),
+        "-b:v",
+        bitrate,
+        "-maxrate:v",
+        maxrate,
+        "-bufsize:v",
+        NVENC_BUFSIZE,
+        "-multipass",
+        "fullres",
+        "-rc-lookahead",
+        str(NVENC_LOOKAHEAD),
+        "-spatial_aq",
+        "1",
+        "-temporal_aq",
+        "1",
+        "-aq-strength",
+        str(NVENC_AQ_STRENGTH),
+        "-bf",
+        str(NVENC_B_FRAMES),
+        "-g",
+        str(NVENC_GOP_SIZE),
+        "-pix_fmt",
+        "yuv420p10le",
     ]
 
 
 def build_hevc_nvenc_args(cq: int, preset: str, bitrate: str, maxrate: str) -> list[str]:
     """Build ffmpeg arguments for HEVC NVENC encoder."""
     return [
-        "-preset", preset,
-        "-tune", "hq",
-        "-rc", "vbr",
-        "-cq", str(cq),
-        "-b:v", bitrate,
-        "-maxrate:v", maxrate,
-        "-bufsize:v", NVENC_BUFSIZE,
-        "-multipass", "qres",
-        "-rc-lookahead", str(NVENC_LOOKAHEAD),
-        "-spatial_aq", "1",
-        "-temporal_aq", "1",
-        "-aq-strength", str(NVENC_AQ_STRENGTH),
-        "-bf", str(NVENC_B_FRAMES),
-        "-g", str(NVENC_GOP_SIZE),
-        "-pix_fmt", "yuv420p10le",
+        "-preset",
+        preset,
+        "-tune",
+        "hq",
+        "-rc",
+        "vbr",
+        "-cq",
+        str(cq),
+        "-b:v",
+        bitrate,
+        "-maxrate:v",
+        maxrate,
+        "-bufsize:v",
+        NVENC_BUFSIZE,
+        "-multipass",
+        "qres",
+        "-rc-lookahead",
+        str(NVENC_LOOKAHEAD),
+        "-spatial_aq",
+        "1",
+        "-temporal_aq",
+        "1",
+        "-aq-strength",
+        str(NVENC_AQ_STRENGTH),
+        "-bf",
+        str(NVENC_B_FRAMES),
+        "-g",
+        str(NVENC_GOP_SIZE),
+        "-pix_fmt",
+        "yuv420p10le",
     ]
 
 
@@ -107,27 +131,34 @@ def build_svtav1_args(cq: int, preset: str) -> list[str]:
     preset_map = {"p7": "2", "p6": "3", "p5": "4", "p4": "5", "p3": "6", "p2": "7", "p1": "8"}
     sv_preset = preset_map.get(preset, "4")
     return [
-        "-preset", sv_preset,
-        "-crf", str(cq),
-        "-svtav1-params", "fast-decode=1:tune=0",
-        "-g", str(SVTAV1_GOP_SIZE),
-        "-pix_fmt", "yuv420p10le",
+        "-preset",
+        sv_preset,
+        "-crf",
+        str(cq),
+        "-svtav1-params",
+        "fast-decode=1:tune=0",
+        "-g",
+        str(SVTAV1_GOP_SIZE),
+        "-pix_fmt",
+        "yuv420p10le",
     ]
 
 
 def build_x265_args(cq: int, preset: str) -> list[str]:
     """Build ffmpeg arguments for x265 encoder."""
-    preset_map = {
-        "p7": "veryslow", "p6": "slower", "p5": "slow",
-        "p4": "medium", "p3": "fast", "p2": "faster", "p1": "veryfast"
-    }
+    preset_map = {"p7": "veryslow", "p6": "slower", "p5": "slow", "p4": "medium", "p3": "fast", "p2": "faster", "p1": "veryfast"}
     x265_preset = preset_map.get(preset, "slow")
     return [
-        "-preset", x265_preset,
-        "-crf", str(cq),
-        "-x265-params", "aq-mode=3:psy-rd=1.0",
-        "-g", str(X265_GOP_SIZE),
-        "-pix_fmt", "yuv420p10le",
+        "-preset",
+        x265_preset,
+        "-crf",
+        str(cq),
+        "-x265-params",
+        "aq-mode=3:psy-rd=1.0",
+        "-g",
+        str(X265_GOP_SIZE),
+        "-pix_fmt",
+        "yuv420p10le",
     ]
 
 
@@ -177,9 +208,11 @@ def build_ffmpeg_command(
         "ffmpeg",
         *hwaccel_args,
         "-y" if overwrite else "-n",
-        "-v", "error",
+        "-v",
+        "error",
         "-stats",
-        "-i", str(input_path),
+        "-i",
+        str(input_path),
     ]
 
     # Add scale filter if resolution specified
@@ -216,10 +249,7 @@ def transcode_file(
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    cmd = build_ffmpeg_command(
-        input_path, output_path, codec, cq, preset,
-        overwrite, no_audio, bitrate, maxrate, resolution
-    )
+    cmd = build_ffmpeg_command(input_path, output_path, codec, cq, preset, overwrite, no_audio, bitrate, maxrate, resolution)
 
     try:
         subprocess.run(cmd, check=True)
