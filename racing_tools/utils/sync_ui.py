@@ -118,9 +118,14 @@ def run_interactive_sync(video_path, crossings, fps=None, duration=None):
             y += 30
             
         cv2.imshow(window_name, frame)
-        
+
         key = cv2.waitKey(0)
-        
+
+        # Window closed (X button) or destroyed
+        if key == -1 or cv2.getWindowProperty(window_name, cv2.WND_PROP_VISIBLE) < 1:
+            print("Cancelled.")
+            break
+
         # Navigation
         if key == 27: # Esc
             print("Cancelled.")
@@ -272,9 +277,14 @@ def run_manual_lap_marking(video_path, start_time: float = 0.0):
             y += 30
             
         cv2.imshow(window_name, frame)
-        
+
         key = cv2.waitKey(0)
-        
+
+        # Window closed (X button) or destroyed
+        if key == -1 or cv2.getWindowProperty(window_name, cv2.WND_PROP_VISIBLE) < 1:
+            print("Cancelled.")
+            break
+
         # Navigation
         if key == 27: # Esc
             print("Cancelled.")
@@ -431,6 +441,12 @@ def run_trim_selection(video_path):
         cv2.imshow(window_name, frame)
 
         key = cv2.waitKey(0)
+
+        # Window closed (X button) or destroyed
+        if key == -1 or cv2.getWindowProperty(window_name, cv2.WND_PROP_VISIBLE) < 1:
+            cap.release()
+            cv2.destroyAllWindows()
+            return None, None
 
         if confirming:
             if key == ord('y') or key == 13: # y or Enter again
