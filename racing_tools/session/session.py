@@ -144,6 +144,9 @@ class Session:
     crossings: list[float] = field(default_factory=list)
     crossings_gps: list[float] = field(default_factory=list)
 
+    def __post_init__(self):
+        self.compute_gear_ratio()
+
     def __getattr__(self, name: str):
         if name in ("driver", "venue", "vehicle", "session", "device", "event_date", "event_time", "tags"):
             return getattr(self.metadata, name)
@@ -266,6 +269,37 @@ class Session:
         print(f"[Crossings] Detected {len(crossings)} GPS crossings")
         self.crossings = crossings
         return crossings
+
+    def compute_gear_ratio(self, tire_diameter_in: float = 11.0) -> None:
+        """Compute overall gear ratio from RPM and Speed, add as 'GearRatio' column.
+
+        gear_ratio = engine_RPM / wheel_RPM
+        wheel_RPM  = speed_m_s * 60 / (π * tire_diameter_m)
+
+        Args:
+            tire_diameter_in: Tire diameter in inches (default 11 for kart).
+        """
+        rpm_col = self._pick_column(["RPM", "Engine RPM", "Régime"])
+        speed_col = self._pick_column(["Speed", "GPS Speed", "Wheel Speed", "Vitesse"])
+        if not rpm_col or not speed_col:
+            print("[GearRatio] Missing RPM or Speed channel, skipping.")
+            return
+
+        rpm = pd.to_numeric(self.table[rpm_col], errors="coerce").values
+        speed_kmh = pd.to_numeric(self.table[speed_col], errors="coerce").values
+
+        tire_diameter_m = tire_diameter_in * 0.0254
+        tire_circumference = np.pi * tire_diameter_m
+        speed_ms = speed_kmh / 3.6
+
+        # wheel_rpm = speed_ms * 60 / tire_circumference
+        # gear_ratio = engine_rpm / wheel_rpm
+        with np.errstate(divide="ignore", invalid="ignore"):
+            wheel_rpm = speed_ms * 60.0 / tire_circumference
+            gear_ratio = np.where(wheel_rpm > 0, rpm / wheel_rpm, 0.0)
+
+        self.table["GearRatio"] = np.round(gear_ratio, 3)
+        print(f"[GearRatio] Computed from {rpm_col} and {speed_col} (tire Ø{tire_diameter_in}\")")
 
     def compute_heading(self) -> None:
         """Compute heading from GPS trajectory and add as 'Heading' column.
