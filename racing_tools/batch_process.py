@@ -149,8 +149,13 @@ def main() -> int:
     all_dirs: list[Path] = []
     for folder in folders:
         if folder.is_dir():
-            subdirs = [d for d in folder.iterdir() if d.is_dir()]
-            all_dirs.extend(subdirs)
+            if find_telemetry(folder):
+                # Folder itself contains telemetry — treat as session folder
+                all_dirs.append(folder)
+            else:
+                # Parent folder — look at subdirectories
+                subdirs = [d for d in folder.iterdir() if d.is_dir()]
+                all_dirs.extend(subdirs)
         else:
             all_dirs.append(folder.parent)
 
