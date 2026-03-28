@@ -164,7 +164,7 @@ def main():
 
     aim_cmd = sub.add_parser("aim", help="convert AIM session")
     aim_cmd.add_argument("directory")
-    aim_cmd.add_argument("--frequency", type=float, default=20.0)
+    aim_cmd.add_argument("--frequency", type=float, default=50.0)
     aim_cmd.add_argument("--output")
     aim_cmd.add_argument("--raw", action="store_true", help="skip normalization")
     aim_cmd.add_argument("--keep", action="store_true", help="keep tmp csv")
@@ -172,7 +172,7 @@ def main():
 
     alfano_cmd = sub.add_parser("alfano", help="convert Alfano LAP files")
     alfano_cmd.add_argument("directory")
-    alfano_cmd.add_argument("--frequency", type=float, default=10.0)
+    alfano_cmd.add_argument("--frequency", type=float, default=50.0)
     alfano_cmd.add_argument("--output")
     alfano_cmd.add_argument("--raw", action="store_true")
     alfano_cmd.add_argument("--keep", action="store_true")
@@ -189,8 +189,8 @@ def main():
     batch_cmd = sub.add_parser("batch", help="convert each session under a folder")
     batch_cmd.add_argument("directory")
     batch_cmd.add_argument("--keep-tmp", action="store_true")
-    batch_cmd.add_argument("--aim-frequency", type=float, default=20.0)
-    batch_cmd.add_argument("--alfano-frequency", type=float, default=10.0)
+    batch_cmd.add_argument("--aim-frequency", type=float, default=50.0)
+    batch_cmd.add_argument("--alfano-frequency", type=float, default=50.0)
     batch_cmd.add_argument("--excel-frequency", type=float)
     batch_cmd.set_defaults(func=handle_batch)
 

@@ -17,6 +17,10 @@
         "scale": 0.1,
         "description": "Alfano stores speed as int*10"
       },
+      "Speed GPS 25Hz": {
+        "scale": 0.1,
+        "description": "Alfano stores speed as int*10"
+      },
       "Altitude": {
         "scale": 0.1,
         "description": "Alfano stores altitude as int*10"
@@ -60,7 +64,8 @@
       "unit": "km/h",
       "aliases": [
         "GPS Speed",
-        "Speed GPS"
+        "Speed GPS",
+        "Speed GPS 25Hz"
       ]
     },
     "Wheel Speed": {
