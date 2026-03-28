@@ -92,7 +92,12 @@ def find_telemetry(folder: Path) -> tuple[str, Path] | None:
     return None
 
 
-def process_folder(folder: Path, resolution: int, stabilisation: bool, telemetry_only: bool) -> bool:
+def has_export(folder: Path) -> bool:
+    """Check if folder already has a MoTeC .ld export."""
+    return bool(list(folder.glob("*.ld")))
+
+
+def process_folder(folder: Path, resolution: int, stabilisation: bool, telemetry_only: bool, overwrite: bool = False) -> bool:
     folder = Path(folder)
     result = find_telemetry(folder)
     video = None if telemetry_only else find_video(folder)
@@ -104,6 +109,10 @@ def process_folder(folder: Path, resolution: int, stabilisation: bool, telemetry
     if not result:
         print(f"[SKIP] No telemetry found in {folder}")
         return False
+
+    if not overwrite and has_export(folder):
+        print(f"[SKIP] Already exported (use --overwrite to re-process)")
+        return True
 
     fmt, telemetry = result
     print(f"[FOUND] Telemetry: {telemetry.name} ({fmt})")
@@ -141,6 +150,7 @@ def main() -> int:
     p.add_argument("--resolution", type=int, default=720, help="Video resolution height (default: 720)")
     p.add_argument("--stabilise", action="store_true", help="Enable video stabilisation")
     p.add_argument("--telemetry-only", action="store_true", help="Only export telemetry (skip video)")
+    p.add_argument("--overwrite", action="store_true", help="Re-process folders that already have exports")
     p.add_argument("--dry-run", action="store_true", help="Show what would be processed")
     args = p.parse_args()
 
@@ -178,7 +188,7 @@ def main() -> int:
     failed = 0
 
     for folder in all_dirs:
-        ok = process_folder(folder, args.resolution, args.stabilise, args.telemetry_only)
+        ok = process_folder(folder, args.resolution, args.stabilise, args.telemetry_only, args.overwrite)
         if ok:
             success += 1
         else:
