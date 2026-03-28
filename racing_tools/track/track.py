@@ -98,6 +98,7 @@ class Track:
         segments: Optional[List[Dict]] = None,
         start_finish_utm: Optional[List[Tuple[float, float]]] = None,
         bestline_utm: Optional[List[Tuple[float, float]]] = None,
+        name: str = "",
     ):
         # Boundaries in WGS84 for zone determination
         self._inner_boundary_wgs84 = inner_boundary_wgs84
@@ -143,6 +144,9 @@ class Track:
 
         # Bestline (UTM only, WGS84 computed dynamically)
         self.bestline_utm = bestline_utm
+
+        # Track name from config
+        self.name = name
 
         # Centerline projector (lazy init)
         self._projector_initialized = False
@@ -472,6 +476,7 @@ class Track:
         # Load track configuration (optional UTM zone override)
         config = load_track_config(track_dir)
         utm_zone_override = config.get("utm_zone", None)
+        track_name = config.get("name", "")
 
         # Load inner/outer boundaries from GeoJSON (WGS84)
         geometry_dir = track_dir / "geometry"
@@ -617,6 +622,7 @@ class Track:
             segments=segments,
             start_finish_utm=start_finish_utm,
             bestline_utm=bestline_utm,
+            name=track_name,
         )
 
         # Pre-set the computed centerline to avoid recomputation

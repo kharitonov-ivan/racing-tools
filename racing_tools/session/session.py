@@ -16,7 +16,7 @@ import pandas as pd
 from pyproj import Transformer
 
 from racing_tools.session.normalizer import ChannelNormalizer
-from racing_tools.session.utils import segments_intersect
+from racing_tools.session.utils import infer_datetime_from_path, name_tokens, segments_intersect
 from racing_tools.track.constants import MIN_VALID_LAP_TIME
 
 if TYPE_CHECKING:
@@ -522,11 +522,33 @@ class Session:
             zf.extractall(tmp_dir)
 
         if list(tmp_dir.glob("LAP_*.csv")):
-            return cls.load_alfano_raw(tmp_dir, **kwargs)
-        if list(tmp_dir.glob("Excel_*.csv")):
-            return cls.load_alfano_csv(tmp_dir, **kwargs)
+            session = cls.load_alfano_raw(tmp_dir, **kwargs)
+        elif list(tmp_dir.glob("Excel_*.csv")):
+            session = cls.load_alfano_csv(tmp_dir, **kwargs)
+        else:
+            return cls.load(tmp_dir, **kwargs)
 
-        return cls.load(tmp_dir, **kwargs)
+        # Re-derive metadata from original zip parent folder, not temp dir
+        origin = path.parent
+        tokens = name_tokens(origin)
+        # Folder format: YYYY_MM_DD_HH_MM_Venue_Vehicle_Driver_Session
+        # tokens[0..4] = date/time, [5] = venue, [6] = vehicle, [7] = driver, [8] = session
+        if len(tokens) > 5:
+            session.metadata.venue = tokens[5]
+        if len(tokens) > 6:
+            session.metadata.vehicle = tokens[6]
+        if len(tokens) > 7:
+            session.metadata.driver = tokens[7]
+        if len(tokens) > 8:
+            session.metadata.session = tokens[8]
+
+        date_text, time_text = infer_datetime_from_path(origin)
+        if date_text:
+            session.metadata.event_date = date_text
+        if time_text:
+            session.metadata.event_time = time_text
+
+        return session
 
     @classmethod
     def load_aim_raw(cls, path: Path, normalize: bool = True) -> "Session":
