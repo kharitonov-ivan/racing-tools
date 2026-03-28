@@ -97,10 +97,11 @@ def has_export(folder: Path) -> bool:
     return bool(list(folder.glob("*.ld")))
 
 
-def process_folder(folder: Path, resolution: int, stabilisation: bool, telemetry_only: bool, overwrite: bool = False) -> bool:
+def process_folder(folder: Path, args: argparse.Namespace) -> bool:
     folder = Path(folder)
     result = find_telemetry(folder)
-    video = None if telemetry_only else find_video(folder)
+    video = find_video(folder)
+    want_video = args.ass or args.render
 
     print(f"\n{'=' * 60}")
     print(f"Processing: {folder.name}")
@@ -110,31 +111,39 @@ def process_folder(folder: Path, resolution: int, stabilisation: bool, telemetry
         print(f"[SKIP] No telemetry found in {folder}")
         return False
 
-    if not overwrite and has_export(folder):
+    if not args.overwrite and has_export(folder):
         print(f"[SKIP] Already exported (use --overwrite to re-process)")
         return True
 
     fmt, telemetry = result
     print(f"[FOUND] Telemetry: {telemetry.name} ({fmt})")
-    print(f"[FOUND] Video: {video.name if video else 'None'}")
+
+    if want_video and not video:
+        if args.telemetry:
+            print(f"[WARN] No video found, exporting telemetry only")
+        else:
+            print(f"[SKIP] No video found (required for --ass/--render)")
+            return False
+
+    use_video = video and want_video
+    if use_video:
+        print(f"[FOUND] Video: {video.name}")
 
     cmd = [
-        sys.executable,
-        "-m",
-        "racing_tools.run",
-        "--telemetry",
-        str(telemetry),
-        "--track",
-        str(TRACK_DIR),
+        sys.executable, "-m", "racing_tools.run",
+        "--telemetry", str(telemetry),
+        "--track", str(TRACK_DIR),
+        "--no-interactive",
     ]
 
-    if not telemetry_only:
-        cmd.extend(["--resolution", str(resolution)])
-
-    if video and not telemetry_only:
+    if use_video:
         cmd.extend(["--in", str(video)])
+        cmd.extend(["--resolution", str(args.resolution)])
 
-    if stabilisation:
+    if use_video and args.ass and not args.render:
+        cmd.append("--no-render")
+
+    if args.stabilise:
         cmd.append("--stabilise")
 
     print(f"[RUN] {' '.join(cmd)}")
@@ -147,12 +156,18 @@ def main() -> int:
     p = argparse.ArgumentParser(description="Batch process racing sessions")
     p.add_argument("folders", nargs="*", default=[str(PROJECT_ROOT / "data" / "new")], help="Folders to process (default: data/new)")
     p.add_argument("--n", type=int, default=None, help="Process N newest folders")
+    p.add_argument("--telemetry", action="store_true", help="Export telemetry (.ld)")
+    p.add_argument("--ass", action="store_true", help="Generate ASS overlay for source video")
+    p.add_argument("--render", action="store_true", help="Render video with ASS overlay and trimming")
     p.add_argument("--resolution", type=int, default=720, help="Video resolution height (default: 720)")
     p.add_argument("--stabilise", action="store_true", help="Enable video stabilisation")
-    p.add_argument("--telemetry-only", action="store_true", help="Only export telemetry (skip video)")
     p.add_argument("--overwrite", action="store_true", help="Re-process folders that already have exports")
     p.add_argument("--dry-run", action="store_true", help="Show what would be processed")
     args = p.parse_args()
+
+    # Default: telemetry only if no stage flags specified
+    if not args.telemetry and not args.ass and not args.render:
+        args.telemetry = True
 
     folders = [Path(f) for f in args.folders]
 
@@ -188,7 +203,7 @@ def main() -> int:
     failed = 0
 
     for folder in all_dirs:
-        ok = process_folder(folder, args.resolution, args.stabilise, args.telemetry_only, args.overwrite)
+        ok = process_folder(folder, args)
         if ok:
             success += 1
         else:

@@ -91,6 +91,7 @@ def main() -> int:
         default=True,
         help="Disable exporting best lap (enabled by default)",
     )
+    p.add_argument("--no-render", action="store_true", help="Generate ASS overlay but skip video render")
 
     args = p.parse_args()
 
@@ -234,6 +235,11 @@ def main() -> int:
         emit_gauge_ass(ass, video_session)
 
     ass_path = ass.write(inp_path.with_suffix(".ass"))
+    print(f"[ASS] Exported to {ass_path}")
+
+    if args.no_render:
+        return 0
+
     trimmed_ass_path = Path(args.out).with_name(f"{Path(args.out).stem}_trimmed.ass")
     ass.write_with_offset(trimmed_ass_path, time_offset=-trim_start)
 
