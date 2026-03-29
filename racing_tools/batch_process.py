@@ -133,10 +133,8 @@ def process_folder(folder: Path, args: argparse.Namespace) -> bool:
         sys.executable, "-m", "racing_tools.run",
         "--telemetry", str(telemetry),
         "--track", str(TRACK_DIR),
+        "--no-interactive",
     ]
-
-    if args.no_interactive:
-        cmd.append("--no-interactive")
 
     if use_video:
         cmd.extend(["--in", str(video)])
@@ -164,7 +162,6 @@ def main() -> int:
     p.add_argument("--resolution", type=int, default=720, help="Video resolution height (default: 720)")
     p.add_argument("--stabilise", action="store_true", help="Enable video stabilisation")
     p.add_argument("--overwrite", action="store_true", help="Re-process folders that already have exports")
-    p.add_argument("--no-interactive", action="store_true", help="Skip interactive prompts in run.py")
     p.add_argument("--dry-run", action="store_true", help="Show what would be processed")
     args = p.parse_args()
 
