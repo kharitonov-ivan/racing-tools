@@ -162,7 +162,7 @@ output/
 *.avi
 *.mkv
 
-data
+/data
 figures
 sound_to_rpm
 texture-nn

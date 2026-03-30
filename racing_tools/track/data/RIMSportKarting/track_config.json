@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "utm_zone": "EPSG:32638",
+  "name": "RIM Sport Karting",
+  "comment": "UTM Zone 38N for accurate scaling"
+}
