@@ -12,9 +12,32 @@ from racing_tools.session.distance import ensure_distance
 from racing_tools.session.normalizer import ChannelNormalizer
 from racing_tools.session.utils import infer_datetime_from_path, name_tokens
 
+import subprocess
+
 ROOT = Path(__file__).resolve().parent
 MOTEC = ROOT / "motec_log_generator.py"
 THIRD_MOTEC = ROOT.parent.parent / "third_party" / "MotecLogGenerator" / "motec_log_generator.py"
+TDA_DIR = ROOT.parent.parent / "third_party" / "TrackDataAnalysis"
+
+
+def _ensure_tda_compiled() -> None:
+    """Build TrackDataAnalysis Cython extension if not already compiled."""
+    if not TDA_DIR.is_dir():
+        return
+    data_dir = TDA_DIR / "data"
+    so_files = list(data_dir.glob("aim_xrk*.so")) + list(data_dir.glob("aim_xrk*.pyd"))
+    if so_files:
+        return
+    pyx = data_dir / "aim_xrk.pyx"
+    if not pyx.exists():
+        return
+    print("[TDA] Compiling aim_xrk Cython extension (first run)...")
+    subprocess.run(
+        [sys.executable, "setup.py", "build_ext", "--inplace"],
+        cwd=TDA_DIR,
+        check=True,
+    )
+    print("[TDA] Compilation done.")
 
 
 # TODO: motec_script() doesn't belong in aim/loader — move to session/ or a shared module
@@ -100,9 +123,10 @@ def load_raw(path: Path, normalize: bool = True) -> tuple[pd.DataFrame, dict]:
 
     except (ImportError, OSError, AttributeError) as e_dll:
         try:
-            tda_path = Path(__file__).resolve().parents[2] / "third_party" / "TrackDataAnalysis"
-            if str(tda_path) not in sys.path:
-                sys.path.append(str(tda_path))
+            _ensure_tda_compiled()
+
+            if str(TDA_DIR) not in sys.path:
+                sys.path.append(str(TDA_DIR))
 
             from data import aim_xrk
 
@@ -141,7 +165,13 @@ def load_raw(path: Path, normalize: bool = True) -> tuple[pd.DataFrame, dict]:
             table = pd.concat(series_list, axis=1).sort_index()
 
         except Exception as e_tda:
-            raise ImportError(f"Failed to load XRK. Native DLL error: {e_dll} | TDA Parser error: {e_tda}")
+            raise ImportError(
+                f"Failed to load XRK file.\n"
+                f"  DLL loader: {e_dll}\n"
+                f"  TDA parser: {e_tda}\n"
+                f"The XRK DLL only works on Windows. On Linux/WSL, the TDA Cython parser is required.\n"
+                f"Build it with: cd racing_tools/third_party/TrackDataAnalysis && pip install cython && python setup.py build_ext --inplace"
+            )
 
     table = table.ffill().bfill()
     table = table.reset_index()
