@@ -174,6 +174,7 @@ def emit_lap_stats_ass(ass: AssBuilder, session: "VideoSession") -> None:
     total_width = sum(c[2] for c in scaled_columns) + col_gap * (len(scaled_columns) - 1)
     base_x = width - total_width - margin_right
     start_y = int(50 * scale_h)
+    # TODO: Reduce row height (currently 40 * scale_h) to fit more laps on screen
     row_h = int(40 * scale_h)
 
     col_positions: list[int] = []
