@@ -4,3 +4,9 @@
 [submodule "converter/third_party/xrk"]
 	path = racing_tools/third_party/xrk
 	url = https://github.com/laz-/xrk.git
+[submodule "racing_tools/third_party/TrackDataAnalysis"]
+	path = racing_tools/third_party/TrackDataAnalysis
+	url = https://github.com/racer-coder/TrackDataAnalysis
+[submodule "racing_tools/third_party/kn5-obj-converter"]
+	path = racing_tools/third_party/kn5-obj-converter
+	url = https://github.com/MarvinSt/kn5-obj-converter.git
