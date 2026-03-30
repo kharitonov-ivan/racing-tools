@@ -179,6 +179,8 @@ def run_interactive_sync(video_path, crossings, fps=None, duration=None):
 
 
 def run_manual_lap_marking(video_path, start_time: float = 0.0):
+    # TODO: Add sector marking feature - use keys 1-5 to mark sector boundaries within each lap.
+    # This would enable per-lap sector time analysis and comparison.
     """
     Runs an interactive OpenCV window to manually mark lap boundaries.
     
