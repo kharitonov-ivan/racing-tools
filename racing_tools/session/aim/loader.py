@@ -52,6 +52,10 @@ def motec_script() -> Path:
     )
 
 
+# TODO: replace xrk DLL + TDA Cython with https://github.com/bmc-labs/xdrk (Rust, Apache-2.0)
+#   - native XRK parser in Rust, works on Linux and Windows (pre-compiled binaries)
+#   - can be wrapped via PyO3/maturin for a single cross-platform Python extension
+#   - eliminates both the Windows-only DLL and the Cython compilation step
 def load_raw(path: Path, normalize: bool = True) -> tuple[pd.DataFrame, dict]:
     path = Path(path)
     if not path.is_file():
