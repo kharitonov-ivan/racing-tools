@@ -78,6 +78,11 @@ def load_csv(
     frequency: float = None,
     normalize: bool = True,
 ) -> tuple[pd.DataFrame, dict]:
+    # TODO: Fix European decimal format handling in Alfano7 Excel CSV export.
+    # RPM and Orientation use comma (4,562) while Speed GPS and others use point (28.1).
+    # Current code parses RPM as strings, resulting in NaN after to_numeric().
+    # Need to either: 1) Use decimal=',' in excel_frame() and post-process point-separated cols,
+    # or 2) Parse numeric columns individually with appropriate decimal separators.
     path_or_folder = Path(path_or_folder)
 
     if path_or_folder.is_file() and path_or_folder.suffix.lower() == ".csv":
