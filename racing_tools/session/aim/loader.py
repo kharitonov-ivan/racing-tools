@@ -17,11 +17,16 @@ MOTEC = ROOT / "motec_log_generator.py"
 THIRD_MOTEC = ROOT.parent.parent / "third_party" / "MotecLogGenerator" / "motec_log_generator.py"
 
 
+# TODO: motec_script() doesn't belong in aim/loader — move to session/ or a shared module
 def motec_script() -> Path:
     for candidate in (MOTEC, THIRD_MOTEC):
         if candidate.is_file():
             return candidate
-    raise FileNotFoundError("motec_log_generator.py missing")
+    raise FileNotFoundError(
+        "motec_log_generator.py not found. "
+        "Did you clone with --recurse-submodules? "
+        "Run: git submodule update --init --recursive"
+    )
 
 
 def load_raw(path: Path, normalize: bool = True) -> tuple[pd.DataFrame, dict]:
