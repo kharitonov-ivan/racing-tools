@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Transcode Script.
 
-Transcodes video(s) to HEVC/AV1.
+Transcodes video(s) to HEVC/AV1/H.264.
 
 Usage:
     # Single file (GPU HEVC)
@@ -12,6 +12,12 @@ Usage:
 
     # GPU AV1 (better compression, but OpenCV seek may not work)
     python racing_tools/transcode.py video.mp4 --codec av1_nvenc
+
+    # CPU HEVC (no GPU required)
+    python racing_tools/transcode.py video.mp4 --codec libx265
+
+    # CPU H.264 (faster, wider compatibility)
+    python racing_tools/transcode.py video.mp4 --codec libx264
 
     # CPU AV1 (slower, better compression)
     python racing_tools/transcode.py video.mp4 --codec libsvtav1
@@ -162,6 +168,24 @@ def build_x265_args(cq: int, preset: str) -> list[str]:
     ]
 
 
+def build_x264_args(cq: int, preset: str) -> list[str]:
+    """Build ffmpeg arguments for x264 encoder."""
+    preset_map = {"p7": "veryslow", "p6": "slower", "p5": "slow", "p4": "medium", "p3": "fast", "p2": "faster", "p1": "veryfast"}
+    x264_preset = preset_map.get(preset, "slow")
+    return [
+        "-preset",
+        x264_preset,
+        "-crf",
+        str(cq),
+        "-tune",
+        "film",
+        "-g",
+        str(X265_GOP_SIZE),
+        "-pix_fmt",
+        "yuv420p",
+    ]
+
+
 def get_video_codec_args(codec: str, cq: int, preset: str, bitrate: str, maxrate: str) -> list[str]:
     """Get encoder-specific arguments for video codec.
 
@@ -170,6 +194,7 @@ def get_video_codec_args(codec: str, cq: int, preset: str, bitrate: str, maxrate
     - av1_nvenc: cq=20 (good), cq=15 (excellent), cq=12 (near-lossless)
     - libsvtav1: cq=30 (good), cq=25 (excellent), cq=20 (near-lossless)
     - libx265: cq=26 (good), cq=22 (excellent), cq=18 (near-lossless)
+    - libx264: cq=23 (good), cq=20 (excellent), cq=16 (near-lossless)
     """
     base_args = ["-c:v", codec]
 
@@ -181,6 +206,8 @@ def get_video_codec_args(codec: str, cq: int, preset: str, bitrate: str, maxrate
         codec_args = build_svtav1_args(cq, preset)
     elif codec == "libx265":
         codec_args = build_x265_args(cq, preset)
+    elif codec == "libx264":
+        codec_args = build_x264_args(cq, preset)
     else:
         print(f"[Warning] Unknown codec '{codec}', using default settings")
         codec_args = ["-q:v", str(cq)]
@@ -256,6 +283,11 @@ def transcode_file(
         return True
     except subprocess.CalledProcessError as e:
         print(f"Error transcoding {input_path.name}: {e}")
+        # Suggest CPU codec if CUDA/NVENC failed
+        if "nvenc" in codec.lower() and ("cuda" in str(e).lower() or "nvenc" in str(e).lower() or "device" in str(e).lower()):
+            print("\n[TIP] CUDA/NVENC encoder failed. Try CPU encoding instead:")
+            print(f"      {sys.argv[0]} {input_path} --codec libx265  # HEVC")
+            print(f"      {sys.argv[0]} {input_path} --codec libx264  # H.264")
         return False
     except KeyboardInterrupt:
         print("\nTranscoding interrupted by user.")
@@ -353,13 +385,13 @@ def parse_args() -> argparse.Namespace:
         "--codec",
         type=str,
         default="hevc_nvenc",
-        help="Video codec: av1_nvenc, hevc_nvenc (GPU), libsvtav1 (CPU AV1), libx265 (CPU HEVC). Default: hevc_nvenc",
+        help="Video codec: av1_nvenc, hevc_nvenc (GPU), libsvtav1 (CPU AV1), libx265 (CPU HEVC), libx264 (CPU H.264). Default: hevc_nvenc",
     )
     parser.add_argument(
         "--cq",
         type=int,
         default=18,
-        help="Quality. av1_nvenc: 10-25, hevc_nvenc: 15-28, libsvtav1: 20-35, libx265: 18-26. Lower = better. Default: 18",
+        help="Quality. av1_nvenc: 10-25, hevc_nvenc: 15-28, libsvtav1: 20-35, libx265: 18-26, libx264: 16-28. Lower = better. Default: 18",
     )
     parser.add_argument(
         "--preset",
