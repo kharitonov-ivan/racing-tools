@@ -42,6 +42,14 @@ def load_raw(path: Path, normalize: bool = True) -> tuple[pd.DataFrame, dict]:
     venue = ""
     vehicle = ""
 
+    xrk_dir = ROOT.parent.parent / "third_party" / "xrk"
+    xrk_dll = xrk_dir / "MatLabXRK-2017-64-ReleaseU.dll"
+    assert xrk_dll.exists() or not xrk_dir.exists(), (
+        f"XRK DLL not found at {xrk_dll}. "
+        "Did you clone with --recurse-submodules? "
+        "Run: git submodule update --init --recursive"
+    )
+
     try:
         from racing_tools.third_party.xrk import xrk
 
