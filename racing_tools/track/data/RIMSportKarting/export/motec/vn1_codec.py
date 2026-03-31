@@ -17,6 +17,7 @@ Format structure:
 Coordinates: lat/lon stored as signed 32-bit integers scaled by 10^7
 """
 
+import json
 import struct
 from typing import List, Tuple, Optional
 from dataclasses import dataclass
@@ -246,13 +247,50 @@ def encode_vn1(venue: VN1Venue, filepath: str) -> None:
     encoder.encode(venue, filepath)
 
 
+def geojson_to_vn1(geojson_path: str, vn1_path: str, name: str | None = None) -> None:
+    """Convert a GeoJSON file to VN1 format.
+
+    Reads the first LineString or Polygon feature and extracts its
+    coordinates as the track outline for the VN1 venue file.
+    """
+    with open(geojson_path) as f:
+        data = json.load(f)
+
+    coordinates: list[tuple[float, float]] = []
+
+    features = data.get("features", [data]) if data.get("type") == "FeatureCollection" else [data]
+    for feature in features:
+        geom = feature.get("geometry", feature)
+        geom_type = geom.get("type", "")
+        coords = geom.get("coordinates", [])
+
+        if geom_type == "LineString":
+            coordinates = [(c[0], c[1]) for c in coords]
+            break
+        elif geom_type == "Polygon":
+            coordinates = [(c[0], c[1]) for c in coords[0]]
+            break
+
+    if not coordinates:
+        raise ValueError(f"No LineString or Polygon geometry found in {geojson_path}")
+
+    geojson_name = data.get("name", Path(geojson_path).stem)
+    venue = VN1Venue(
+        name=name or geojson_name,
+        source_path=str(Path(geojson_path).name),
+        coordinates=coordinates,
+    )
+    encode_vn1(venue, vn1_path)
+    print(f"Encoded {len(coordinates)} coordinates to {vn1_path}")
+
+
 if __name__ == '__main__':
     import sys
 
     if len(sys.argv) < 2:
         print("Usage: python vn1_codec.py <vn1_file>")
         print("       python vn1_codec.py decode <vn1_file>")
-        print("       python vn1_codec.py encode <geojson_file> <vn1_output>")
+        print("       python vn1_codec.py encode <geojson_file> <vn1_output> [track_name]")
         sys.exit(1)
 
     command = sys.argv[1]
@@ -271,8 +309,10 @@ if __name__ == '__main__':
             print("Error: Please specify input GeoJSON and output VN1 file")
             sys.exit(1)
 
-        # TODO: Implement GeoJSON to VN1 conversion
-        print("GeoJSON to VN1 conversion - coming soon!")
+        geojson_file = sys.argv[2]
+        vn1_output = sys.argv[3]
+        track_name = sys.argv[4] if len(sys.argv) > 4 else None
+        geojson_to_vn1(geojson_file, vn1_output, name=track_name)
 
     else:
         # Try to decode as VN1 file
