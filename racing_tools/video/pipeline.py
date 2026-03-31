@@ -413,8 +413,12 @@ def export_best_lap(
         print(f"[Best Lap Export] Could not determine crossing times for Lap {best_lap_id}")
         return
 
-    clip_start = crossings[best_lap_id - 1] - buffer_seconds
-    clip_end = (crossings[best_lap_id] if best_lap_id < len(crossings) else crossings[-1] + best_lap["time"]) + buffer_seconds
+    # Crossings are in original video time; convert to output video time
+    lap_start = crossings[best_lap_id - 1] - trim_start
+    lap_end = (crossings[best_lap_id] if best_lap_id < len(crossings) else crossings[-1] + best_lap["time"]) - trim_start
+
+    clip_start = lap_start - buffer_seconds
+    clip_end = lap_end + buffer_seconds
 
     output_duration = video_duration - trim_start
     clip_start = max(0.0, clip_start)
