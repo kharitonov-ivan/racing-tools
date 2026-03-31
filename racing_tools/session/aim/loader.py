@@ -15,8 +15,6 @@ from racing_tools.session.utils import infer_datetime_from_path, name_tokens
 import subprocess
 
 ROOT = Path(__file__).resolve().parent
-MOTEC = ROOT / "motec_log_generator.py"
-THIRD_MOTEC = ROOT.parent.parent / "third_party" / "MotecLogGenerator" / "motec_log_generator.py"
 TDA_DIR = ROOT.parent.parent / "third_party" / "TrackDataAnalysis"
 
 
@@ -39,17 +37,6 @@ def _ensure_tda_compiled() -> None:
     )
     print("[TDA] Compilation done.")
 
-
-# TODO: motec_script() doesn't belong in aim/loader — move to session/ or a shared module
-def motec_script() -> Path:
-    for candidate in (MOTEC, THIRD_MOTEC):
-        if candidate.is_file():
-            return candidate
-    raise FileNotFoundError(
-        "motec_log_generator.py not found. "
-        "Did you clone with --recurse-submodules? "
-        "Run: git submodule update --init --recursive"
-    )
 
 
 # TODO: replace xrk DLL + TDA Cython with https://github.com/bmc-labs/xdrk (Rust, Apache-2.0)

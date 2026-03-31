@@ -16,7 +16,7 @@ import pandas as pd
 from pyproj import Transformer
 
 from racing_tools.session.normalizer import ChannelNormalizer
-from racing_tools.session.utils import infer_datetime_from_path, name_tokens, segments_intersect
+from racing_tools.session.utils import infer_datetime_from_path, motec_script, name_tokens, segments_intersect
 from racing_tools.track.constants import MIN_VALID_LAP_TIME
 
 if TYPE_CHECKING:
@@ -657,8 +657,6 @@ class Session:
         csv_path: Path | None = None,
         keep_csv: bool = False,
     ) -> Path:
-        from racing_tools.session.aim.loader import motec_script
-
         output = Path(output)
         output.parent.mkdir(parents=True, exist_ok=True)
         if csv_path is None:

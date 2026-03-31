@@ -55,6 +55,20 @@ def infer_datetime_from_path(path: Path) -> tuple[str, str]:
     return infer_datetime_from_tokens(name_tokens(path))
 
 
+_SESSION_DIR = Path(__file__).resolve().parent
+_MOTEC_SCRIPT = _SESSION_DIR.parent / "third_party" / "MotecLogGenerator" / "motec_log_generator.py"
+
+
+def motec_script() -> Path:
+    if _MOTEC_SCRIPT.is_file():
+        return _MOTEC_SCRIPT
+    raise FileNotFoundError(
+        "motec_log_generator.py not found. "
+        "Did you clone with --recurse-submodules? "
+        "Run: git submodule update --init --recursive"
+    )
+
+
 def segments_intersect(
     p1: tuple[float, float],
     p2: tuple[float, float],
