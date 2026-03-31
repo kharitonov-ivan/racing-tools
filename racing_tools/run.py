@@ -199,15 +199,21 @@ def main() -> int:
         session.crossings = crossings_video
         session.add_lap_numbers()
 
-    # TODO: Fix video trimming — currently uses lap crossings as trim boundaries,
-    # but output video interval should match the telemetry file time range so the
-    # video can be added to telemetry software without sync issues.
-    # Add: assert output_video_duration == telemetry_duration
-    TRIM_BUFFER = 5.0
     trim_start = 0.0
     trim_end = video_info.duration
 
-    if crossings_video:
+    if session and sync_mapping is not None:
+        telem_times = pd.to_numeric(session.table["Time"], errors="coerce")
+        telem_start = float(telem_times.iloc[0])
+        telem_end = float(telem_times.iloc[-1])
+        trim_start = max(0.0, float(sync_mapping.telemetry_to_video(telem_start)))
+        trim_end = min(video_info.duration, float(sync_mapping.telemetry_to_video(telem_end)))
+        telem_duration = telem_end - telem_start
+        video_duration = trim_end - trim_start
+        print(f"[Trim] From telemetry range: {trim_start:.1f}s — {trim_end:.1f}s "
+              f"(video={video_duration:.1f}s, telem={telem_duration:.1f}s)")
+    elif crossings_video:
+        TRIM_BUFFER = 5.0
         trim_start = max(0.0, crossings_video[0] - TRIM_BUFFER)
         trim_end = min(video_info.duration, crossings_video[-1] + TRIM_BUFFER)
         print(f"[Trim] Auto from crossings: {trim_start:.1f}s — {trim_end:.1f}s")
