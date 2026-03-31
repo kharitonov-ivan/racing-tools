@@ -114,8 +114,8 @@ def process_folder(folder: Path, args: argparse.Namespace) -> bool:
             print(f"[SKIP] No telemetry found in {folder}")
             return False
 
-    if not args.overwrite and has_export(folder):
-        print(f"[SKIP] Already exported (use --overwrite to re-process)")
+    if args.no_overwrite and has_export(folder):
+        print(f"[SKIP] Already exported (remove --no-overwrite to re-process)")
         return True
 
     if result:
@@ -168,7 +168,7 @@ def main() -> int:
     p.add_argument("--render", action="store_true", help="Render video with ASS overlay and trimming")
     p.add_argument("--resolution", type=int, default=720, help="Video resolution height (default: 720)")
     p.add_argument("--stabilise", action="store_true", help="Enable video stabilisation")
-    p.add_argument("--overwrite", action="store_true", help="Re-process folders that already have exports")
+    p.add_argument("--no-overwrite", action="store_true", help="Skip folders that already have exports")
     p.add_argument("--no-interactive", action="store_true", help="Skip all interactive prompts (crossings, lap marking)")
     p.add_argument("--dry-run", action="store_true", help="Show what would be processed")
     args = p.parse_args()
