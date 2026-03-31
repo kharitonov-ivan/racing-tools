@@ -2,5 +2,15 @@
   "version": 1,
   "utm_zone": "EPSG:32638",
   "name": "RIM Sport Karting",
-  "comment": "UTM Zone 38N for accurate scaling"
+  "comment": "UTM Zone 38N for accurate scaling",
+  "start_finish_point": {
+    "lat": 41.5663006209,
+    "lon": 44.949431212,
+    "utm": [
+      495783.696,
+      4601626.139
+    ],
+    "bestline_distance_m": 1288.555,
+    "centerline_distance_m": 1326.452
+  }
 }

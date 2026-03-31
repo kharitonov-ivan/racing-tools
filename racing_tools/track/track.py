@@ -742,23 +742,26 @@ class Track:
         lons, lats = transformer.transform(pts_utm[:, 0], pts_utm[:, 1])
         return list(zip(lons.tolist(), lats.tolist()))
 
-    def export_gpx(self, output_path: Path) -> None:
-        """Export track polylines (boundaries, centerline, bestline, start-finish) to GPX."""
+    def export_gpx(self, output_dir: Path) -> None:
+        """Export each track polyline as a separate GPX file into output_dir."""
         import gpxpy
 
-        gpx = gpxpy.gpx.GPX()
-
         layers: list[tuple[str, list[tuple[float, float]] | None]] = [
-            ("inner boundary", self._utm_to_wgs84(self._inner_boundary_utm) if self._inner_boundary_utm is not None else None),
-            ("outer boundary", self._utm_to_wgs84(self._outer_boundary_utm) if self._outer_boundary_utm is not None else None),
+            ("inner-boundary", self._utm_to_wgs84(self._inner_boundary_utm) if self._inner_boundary_utm is not None else None),
+            ("outer-boundary", self._utm_to_wgs84(self._outer_boundary_utm) if self._outer_boundary_utm is not None else None),
             ("centerline", self._utm_to_wgs84(self.centerline) if self.centerline is not None else None),
             ("bestline", self.bestline_wgs84),
             ("start-finish", self.start_finish_wgs84),
         ]
 
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        exported = 0
         for name, coords in layers:
             if not coords:
                 continue
+            gpx = gpxpy.gpx.GPX()
             track = gpxpy.gpx.GPXTrack(name=name)
             gpx.tracks.append(track)
             segment = gpxpy.gpx.GPXTrackSegment()
@@ -766,7 +769,46 @@ class Track:
             for lon, lat in coords:
                 segment.points.append(gpxpy.gpx.GPXTrackPoint(latitude=lat, longitude=lon))
 
-        output_path = Path(output_path)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(gpx.to_xml(), encoding="utf-8")
-        print(f"[Track] Exported {sum(1 for _, c in layers if c)} layers to {output_path}")
+            path = output_dir / f"{name}.gpx"
+            path.write_text(gpx.to_xml(), encoding="utf-8")
+            exported += 1
+
+        # Add start-finish intersection as waypoint
+        sf = self.start_finish_intersection
+        if sf:
+            gpx_wp = gpxpy.gpx.GPX()
+            transformer = self._get_transformer_to_wgs84()
+            pt = sf["point"]
+            lon, lat = transformer.transform(pt[0], pt[1])
+            gpx_wp.waypoints.append(gpxpy.gpx.GPXWaypoint(latitude=float(lat), longitude=float(lon), name="start-finish"))
+            (output_dir / "start-finish-point.gpx").write_text(gpx_wp.to_xml(), encoding="utf-8")
+            exported += 1
+
+        print(f"[Track] Exported {exported} GPX files to {output_dir}")
+
+    def save_config(self, track_dir: Path) -> None:
+        """Save track_config.json with computed metadata including SF intersection."""
+        import json
+
+        config_path = Path(track_dir) / "track_config.json"
+        config = {}
+        if config_path.exists():
+            config = json.loads(config_path.read_text())
+
+        config["utm_zone"] = self.utm_zone
+
+        sf = self.start_finish_intersection
+        if sf:
+            transformer = self._get_transformer_to_wgs84()
+            pt = sf["point"]
+            lon, lat = transformer.transform(pt[0], pt[1])
+            config["start_finish_point"] = {
+                "lat": round(float(lat), 10),
+                "lon": round(float(lon), 10),
+                "utm": [round(float(pt[0]), 3), round(float(pt[1]), 3)],
+                "bestline_distance_m": round(sf.get("bestline_distance", 0), 3),
+                "centerline_distance_m": round(sf.get("centerline_distance", 0), 3),
+            }
+
+        config_path.write_text(json.dumps(config, indent=2) + "\n")
+        print(f"[Track] Saved config to {config_path}")
