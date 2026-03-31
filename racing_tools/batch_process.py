@@ -108,7 +108,7 @@ def process_folder(folder: Path, args: argparse.Namespace) -> bool:
     print(f"{'=' * 60}")
 
     if not result:
-        if args.interactive and video:
+        if not args.no_interactive and video:
             print(f"[INFO] No telemetry found — interactive lap marking mode")
         else:
             print(f"[SKIP] No telemetry found in {folder}")
@@ -140,7 +140,7 @@ def process_folder(folder: Path, args: argparse.Namespace) -> bool:
 
     cmd.extend(["--track", str(TRACK_DIR)])
 
-    if not args.interactive:
+    if args.no_interactive:
         cmd.append("--no-interactive")
 
     if use_video:
@@ -169,7 +169,7 @@ def main() -> int:
     p.add_argument("--resolution", type=int, default=720, help="Video resolution height (default: 720)")
     p.add_argument("--stabilise", action="store_true", help="Enable video stabilisation")
     p.add_argument("--overwrite", action="store_true", help="Re-process folders that already have exports")
-    p.add_argument("--interactive", "-i", action="store_true", help="Interactive mode: manually mark lap crossings on video")
+    p.add_argument("--no-interactive", action="store_true", help="Skip all interactive prompts (crossings, lap marking)")
     p.add_argument("--dry-run", action="store_true", help="Show what would be processed")
     args = p.parse_args()
 
@@ -182,7 +182,7 @@ def main() -> int:
     all_dirs: list[Path] = []
     for folder in folders:
         if folder.is_dir():
-            is_session = find_telemetry(folder) or (args.interactive and find_video(folder))
+            is_session = find_telemetry(folder) or (not args.no_interactive and find_video(folder))
             if is_session:
                 # Folder itself is a session folder
                 all_dirs.append(folder)
