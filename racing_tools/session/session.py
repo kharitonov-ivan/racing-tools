@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Optional, Sequence
 import numpy as np
 import pandas as pd
 from pyproj import Transformer
+from scipy.signal import savgol_filter
 
 from racing_tools.session.normalizer import ChannelNormalizer
 from racing_tools.session.utils import infer_datetime_from_path, motec_script, name_tokens, segments_intersect
@@ -146,6 +147,7 @@ class Session:
 
     def __post_init__(self):
         self.compute_gear_ratio()
+        self.compute_acceleration()
 
     def __getattr__(self, name: str):
         if name in ("driver", "venue", "vehicle", "session", "device", "event_date", "event_time", "tags"):
@@ -298,8 +300,36 @@ class Session:
             wheel_rpm = speed_ms * 60.0 / tire_circumference
             gear_ratio = np.where(wheel_rpm > 0, rpm / wheel_rpm, 0.0)
 
+        gear_ratio = savgol_filter(gear_ratio, window_length=51, polyorder=2)
         self.table["GearRatio"] = np.round(gear_ratio, 3)
         print(f"[GearRatio] Computed from {rpm_col} and {speed_col} (tire Ø{tire_diameter_in}\")")
+
+    def compute_acceleration(self) -> None:
+        """Compute longitudinal acceleration from GPS Speed, add as 'Acceleration' column.
+
+        Uses Savitzky-Golay differentiation for smooth derivative.
+        Result in m/s² (GPS Speed converted from km/h).
+        """
+        speed_col = self._pick_column(["GPS Speed", "Speed", "Vitesse"])
+        if not speed_col:
+            print("[Acceleration] Missing Speed channel, skipping.")
+            return
+
+        speed_kmh = pd.to_numeric(self.table[speed_col], errors="coerce").values
+        times = pd.to_numeric(self.table["Time"], errors="coerce").values
+
+        dt = np.median(np.diff(times))
+        if dt <= 0:
+            print("[Acceleration] Invalid time series, skipping.")
+            return
+
+        speed_ms = speed_kmh / 3.6
+        # savgol_filter with deriv=1 computes a smooth first derivative
+        # delta=dt gives the result in physical units (m/s²)
+        accel = savgol_filter(speed_ms, window_length=51, polyorder=3, deriv=1, delta=dt)
+
+        self.table["Acceleration"] = np.round(accel, 3)
+        print(f"[Acceleration] Computed from {speed_col} (m/s²)")
 
     def compute_heading(self) -> None:
         """Compute heading from GPS trajectory and add as 'Heading' column.
