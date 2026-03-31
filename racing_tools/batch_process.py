@@ -46,6 +46,8 @@ def parse_folder_datetime(folder: Path) -> datetime:
 def find_video(folder: Path) -> Path | None:
     for ext in VIDEO_EXTS:
         files = list(folder.glob(f"*{ext}")) + list(folder.glob(f"*{ext.upper()}"))
+        # Filter out processed output files
+        files = [f for f in files if "_output" not in f.stem]
         if files:
             return max(files, key=lambda p: p.stat().st_mtime)
     return None
