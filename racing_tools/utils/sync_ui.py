@@ -255,11 +255,19 @@ def run_manual_lap_marking(video_path, start_time: float = 0.0):
             label = f"Start Lap {i+1}"
             info_text.append(f"{label}: {t:.3f}s")
             
+        # Predictive next info
+        predict_available = len(sorted_boundaries) >= 3
+        if predict_available:
+            last_lap = sorted_boundaries[-1] - sorted_boundaries[-2]
+            predict_target = sorted_boundaries[-1] + last_lap - 5.0
+            info_text.append(f"Predict: {predict_target:.1f}s (lap ~{last_lap:.1f}s)")
+
         info_text.append("")
         info_text.append("Controls:")
         info_text.append("  Arrows : Seek (Left/Right: 1fr, Up/Down: 40fr)")
         info_text.append("  PgUp/Dn: Seek 50fr")
         info_text.append("  z / x  : Seek -/+ 7s")
+        info_text.append("  p      : Predictive next (3+ marks)")
         info_text.append("  Space  : Mark/Unmark")
         info_text.append("  Enter  : Finish")
 
@@ -319,6 +327,12 @@ def run_manual_lap_marking(video_path, start_time: float = 0.0):
                 marked_boundaries.append(video_time)
                 print(f"Added mark at {video_time:.3f}s")
                 
+        elif key == ord('p'): # Predictive next
+            if predict_available:
+                target = max(0.0, min(predict_target, duration))
+                current_frame = int(target * fps)
+                print(f"[Predict] Jumped to {target:.1f}s (last lap {last_lap:.1f}s)")
+
         # Seek controls
         elif key == ord('z'): # Seek -7s
             current_frame = max(0, current_frame - frames_7s)
