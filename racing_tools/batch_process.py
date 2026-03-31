@@ -108,15 +108,19 @@ def process_folder(folder: Path, args: argparse.Namespace) -> bool:
     print(f"{'=' * 60}")
 
     if not result:
-        print(f"[SKIP] No telemetry found in {folder}")
-        return False
+        if args.interactive and video:
+            print(f"[INFO] No telemetry found — interactive lap marking mode")
+        else:
+            print(f"[SKIP] No telemetry found in {folder}")
+            return False
 
     if not args.overwrite and has_export(folder):
         print(f"[SKIP] Already exported (use --overwrite to re-process)")
         return True
 
-    fmt, telemetry = result
-    print(f"[FOUND] Telemetry: {telemetry.name} ({fmt})")
+    if result:
+        fmt, telemetry = result
+        print(f"[FOUND] Telemetry: {telemetry.name} ({fmt})")
 
     if want_video and not video:
         if args.telemetry:
@@ -129,15 +133,18 @@ def process_folder(folder: Path, args: argparse.Namespace) -> bool:
     if use_video:
         print(f"[FOUND] Video: {video.name}")
 
-    cmd = [
-        sys.executable, "-m", "racing_tools.run",
-        "--telemetry", str(telemetry),
-        "--track", str(TRACK_DIR),
-        "--no-interactive",
-    ]
+    cmd = [sys.executable, "-m", "racing_tools.run"]
+
+    if result:
+        cmd.extend(["--telemetry", str(telemetry.resolve())])
+
+    cmd.extend(["--track", str(TRACK_DIR)])
+
+    if not args.interactive:
+        cmd.append("--no-interactive")
 
     if use_video:
-        cmd.extend(["--in", str(video)])
+        cmd.extend(["--in", str(video.resolve())])
         cmd.extend(["--resolution", str(args.resolution)])
 
     if use_video and args.ass and not args.render:
@@ -162,6 +169,7 @@ def main() -> int:
     p.add_argument("--resolution", type=int, default=720, help="Video resolution height (default: 720)")
     p.add_argument("--stabilise", action="store_true", help="Enable video stabilisation")
     p.add_argument("--overwrite", action="store_true", help="Re-process folders that already have exports")
+    p.add_argument("--interactive", "-i", action="store_true", help="Interactive mode: manually mark lap crossings on video")
     p.add_argument("--dry-run", action="store_true", help="Show what would be processed")
     args = p.parse_args()
 
@@ -174,8 +182,9 @@ def main() -> int:
     all_dirs: list[Path] = []
     for folder in folders:
         if folder.is_dir():
-            if find_telemetry(folder):
-                # Folder itself contains telemetry — treat as session folder
+            is_session = find_telemetry(folder) or (args.interactive and find_video(folder))
+            if is_session:
+                # Folder itself is a session folder
                 all_dirs.append(folder)
             else:
                 # Parent folder — look at subdirectories
