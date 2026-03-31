@@ -327,28 +327,10 @@ class Session:
         Returns:
             'CCW' or 'CW'
         """
-        # TODO: BUG — Heading column sometimes loaded as strings (object dtype)
-        # instead of float. np.radians() crashes with:
-        #   TypeError: loop of ufunc does not support argument 0 of type str
-        #   which has no callable radians method
-        #
-        # Root cause: some AIM XRK files (older firmware?) produce Heading values
-        # that the loader reads as strings. The Speed column is already guarded by
-        # pd.to_numeric(..., errors="coerce") on line 336, but Heading is not.
-        #
-        # Affected sessions (all IvanKharitonov or DenisSakharov, late 2025):
-        #   - 2025-12-18_16-48 — KharitonovIvan_RotaxMax_ABCD_a_3772.xrk
-        #   - 2025-12-02_17-50 — aim.csv (AIM CSV format)
-        #   - 2025-11-08_11-24 — Denis_Rotax Max_Rust kart_...a_0241.xrk
-        #
-        # Fix: cast headings to numeric here before any math:
-        #   headings = pd.to_numeric(self.table["Heading"], errors="coerce").values
-        # Also apply the same cast in detect_crossings() and compute_heading()
-        # wherever raw column values are passed to numpy math functions.
         assert "Heading" in self.table.columns, "Call compute_heading() first"
 
         speed_col = self._pick_column(["GPS Speed"])
-        headings = self.table["Heading"].values
+        headings = pd.to_numeric(self.table["Heading"], errors="coerce").values
 
         if speed_col:
             speeds = pd.to_numeric(self.table[speed_col], errors="coerce").values
