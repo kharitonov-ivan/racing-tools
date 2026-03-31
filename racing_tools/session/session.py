@@ -376,7 +376,7 @@ class Session:
     def get_lap_durations(self) -> dict[int, float]:
         if not self.crossings:
             return {}
-        start_time = self.table["Time"].iloc[0] if "Time" in self.table.columns else 0.0
+        start_time = float(pd.to_numeric(self.table["Time"], errors="coerce").iloc[0]) if "Time" in self.table.columns else 0.0
         durations = {0: self.crossings[0] - start_time}
         for i in range(1, len(self.crossings)):
             durations[i] = self.crossings[i] - self.crossings[i - 1]
