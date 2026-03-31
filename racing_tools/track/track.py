@@ -735,3 +735,38 @@ class Track:
         with open(output_path, "w") as f:
             json.dump(geojson, f, indent=2)
             logger.info(f"Saved bestline to {output_path}")
+
+    def _utm_to_wgs84(self, pts_utm: np.ndarray) -> list[tuple[float, float]]:
+        """Convert UTM coordinates to WGS84 (lon, lat) pairs."""
+        transformer = self._get_transformer_to_wgs84()
+        lons, lats = transformer.transform(pts_utm[:, 0], pts_utm[:, 1])
+        return list(zip(lons.tolist(), lats.tolist()))
+
+    def export_gpx(self, output_path: Path) -> None:
+        """Export track polylines (boundaries, centerline, bestline, start-finish) to GPX."""
+        import gpxpy
+
+        gpx = gpxpy.gpx.GPX()
+
+        layers: list[tuple[str, list[tuple[float, float]] | None]] = [
+            ("inner boundary", self._utm_to_wgs84(self._inner_boundary_utm) if self._inner_boundary_utm is not None else None),
+            ("outer boundary", self._utm_to_wgs84(self._outer_boundary_utm) if self._outer_boundary_utm is not None else None),
+            ("centerline", self._utm_to_wgs84(self.centerline) if self.centerline is not None else None),
+            ("bestline", self.bestline_wgs84),
+            ("start-finish", self.start_finish_wgs84),
+        ]
+
+        for name, coords in layers:
+            if not coords:
+                continue
+            track = gpxpy.gpx.GPXTrack(name=name)
+            gpx.tracks.append(track)
+            segment = gpxpy.gpx.GPXTrackSegment()
+            track.segments.append(segment)
+            for lon, lat in coords:
+                segment.points.append(gpxpy.gpx.GPXTrackPoint(latitude=lat, longitude=lon))
+
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(gpx.to_xml(), encoding="utf-8")
+        print(f"[Track] Exported {sum(1 for _, c in layers if c)} layers to {output_path}")
