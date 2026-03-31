@@ -199,6 +199,10 @@ def main() -> int:
         session.crossings = crossings_video
         session.add_lap_numbers()
 
+    # TODO: Fix video trimming — currently uses lap crossings as trim boundaries,
+    # but output video interval should match the telemetry file time range so the
+    # video can be added to telemetry software without sync issues.
+    # Add: assert output_video_duration == telemetry_duration
     TRIM_BUFFER = 5.0
     trim_start = 0.0
     trim_end = video_info.duration
