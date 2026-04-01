@@ -267,6 +267,10 @@ def emit_gauge_ass(ass: AssBuilder, session: "VideoSession") -> None:
     # Find RPM column
     rpm_col = next((n for n in ["RPM", "Engine RPM"] if n in session_table.columns), None)
 
+    # Find GPS columns
+    lat_col = next((n for n in ["GPS Latitude", "Latitude", "Lat."] if n in session_table.columns), None)
+    lon_col = next((n for n in ["GPS Longitude", "Longitude", "Lon."] if n in session_table.columns), None)
+
     # Styles
     scale_h = session.info.height / 1080.0
     scale_h = session.info.height / 1080.0
@@ -362,6 +366,13 @@ def emit_gauge_ass(ass: AssBuilder, session: "VideoSession") -> None:
     print(f"[gauge] speeds last 5: {speeds[-5:]}")
     print(f"[gauge] speeds min/max: {speeds.min():.1f}/{speeds.max():.1f}")
 
+    if lat_col and lon_col:
+        lats = session_table[lat_col].values
+        lons = session_table[lon_col].values
+    else:
+        lats = None
+        lons = None
+
     max_rpm = DEFAULT_MAX_RPM
     if rpm_col:
         m = session_table[rpm_col].max()
@@ -412,6 +423,8 @@ def emit_gauge_ass(ass: AssBuilder, session: "VideoSession") -> None:
                     break
             lap_elapsed = t_start - last_crossing
         timer_text = f"Lap {fmt_lap_time(lap_elapsed)}  |  Frame {i}"
+        if lats is not None:
+            timer_text += f"  |  {lats[i]:.6f}, {lons[i]:.6f}"
         ass.add_event(f"Dialogue: 1,{s_str},{e_str},LapTimer,,0,0,0,,{timer_text}")
 
         # Alfano-style Delta (all laps on horizontal line)
