@@ -43,6 +43,16 @@ def load_raw(folder: Path, normalize: bool = True) -> tuple[pd.DataFrame, dict]:
     frame = pd.concat(frames, ignore_index=True)
     frame.insert(0, "Time", np.arange(len(frame)) * STEP)
 
+    # TODO: Expand high-frequency sub-channels to increase effective sample rate.
+    #   Raw LAP CSVs contain additional columns that provide intermediate samples
+    #   between 10Hz rows (value in row N measured between rows N-1 and N):
+    #   - "Speed GPS 25Hz": direct speed value (÷10), place at midpoint → ~20Hz
+    #   - "Lat. 25Hz" / "Lon. 25Hz": signed 16-bit deltas in microdegrees,
+    #     reconstruct position = row_pos + delta → ~20Hz GPS track
+    #   - "RPM 1 20Hz".."RPM 5 50Hz": 5 sub-samples at 0.02s intervals → 50Hz RPM
+    #     (device-dependent, e.g. present on SN1061 but not SN3476)
+    #   See experiments/alfano-log-zip-format/ALFANO7_FORMAT.md for full protocol docs.
+
     if normalize:
         frame = ChannelNormalizer(device_type="alfano").normalize_dataframe(frame)
     frame = ensure_distance(frame, distance_keys=DISTANCE_KEYS, speed_keys=SPEED_KEYS, frequency=1.0 / STEP)
