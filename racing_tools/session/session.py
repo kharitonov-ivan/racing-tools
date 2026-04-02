@@ -943,6 +943,8 @@ class VideoSession(Session):
             "LapTime",
             "NormalizedX",
             "NormalizedY",
+            "GPS Latitude",
+            "GPS Longitude",
         ]
 
         col_mapping = {
