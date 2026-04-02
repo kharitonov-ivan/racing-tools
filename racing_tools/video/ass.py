@@ -154,13 +154,10 @@ def emit_lap_stats_ass(ass: AssBuilder, session: "VideoSession") -> None:
     ass.add_style(f"Style: RowBlue,Arial,{s24},&H00FF8000,&H000000FF,&H00000000,&H60000000,1,0,0,0,100,100,0,0,1,1,1,7,10,10,10,1")  # 2nd (blue)
     ass.add_style(f"Style: RowGreen,Arial,{s24},&H0000FFFF,&H000000FF,&H00000000,&H60000000,1,0,0,0,100,100,0,0,1,1,1,7,10,10,10,1")  # 3rd (green)
 
-    # TODO: Show both "Video lap time" and "Telemetry lap time" columns side-by-side
-    # Currently only shows "Video" and conditionally "GPS" - should always show both
-    # for easy comparison between video-derived and telemetry-derived lap times.
     sample = lap_stats[0]
-    columns: list[tuple[str, str, int]] = [("Lap", "id", 60), ("Video", "time", 120)]
+    columns: list[tuple[str, str, int]] = [("Lap", "id", 60), ("Video LT", "time", 120)]
     if sample.get("gps_time") is not None:
-        columns.append(("GPS", "gps_time", 120))
+        columns.append(("GPS LT", "gps_time", 120))
     for key, value in sample.items():
         if key in ("id", "time", "gps_time", "label"):
             continue
