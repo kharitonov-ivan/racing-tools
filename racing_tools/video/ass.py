@@ -156,7 +156,7 @@ def emit_lap_stats_ass(ass: AssBuilder, session: "VideoSession") -> None:
 
     sample = lap_stats[0]
     columns: list[tuple[str, str, int]] = [("Lap", "id", 60), ("Video LT", "time", 120)]
-    if sample.get("gps_time") is not None:
+    if any(s.get("gps_time") is not None for s in lap_stats):
         columns.append(("GPS LT", "gps_time", 120))
     for key, value in sample.items():
         if key in ("id", "time", "gps_time", "label"):
