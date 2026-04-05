@@ -212,7 +212,7 @@ def plot_track(
                 ax.text(
                     seg_webmerc[mid_idx, 0],
                     seg_webmerc[mid_idx, 1],
-                    f"S{i // 2 + 1}",
+                    f"Str{i // 2 + 1}",
                     fontsize=9,
                     color="blue",
                     fontweight="bold",

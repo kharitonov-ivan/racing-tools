@@ -68,10 +68,11 @@ def _smooth_sf_junction(bestline_utm: np.ndarray, smooth_radius_m: float = 30.0)
     """Smooth the bestline at the start/finish line junction.
 
     The lap GPS data starts and ends at SF, creating two slightly different
-    paths. This averages the "approaching" and "leaving" trajectories in the
-    SF zone with a smooth blend, eliminating the fork without introducing
-    artificial curves.
+    paths. This averages the "approaching" and "leaving" trajectories,
+    then resamples the SF zone uniformly to eliminate spacing artifacts.
     """
+    from scipy.interpolate import CubicSpline
+
     pts = bestline_utm.copy()
     n = len(pts)
 
@@ -81,13 +82,10 @@ def _smooth_sf_junction(bestline_utm: np.ndarray, smooth_radius_m: float = 30.0)
     n_blend = max(4, int(smooth_radius_m / avg_spacing))
     n_blend = min(n_blend, n // 4)
 
-    # For each point near SF, average it with its "mirror" on the other side
-    # pts[0] = start (just after SF), pts[-1] = end (just before SF)
-    # pts[k] mirrors pts[-(k+1)]
+    # Average mirror points near SF
     for k in range(n_blend):
-        # Blend weight: 1.0 at SF (k=0), 0.0 at edge (k=n_blend)
         w = 1.0 - k / n_blend
-        w = w * w  # quadratic falloff for smoother transition
+        w = w * w
 
         idx_start = k
         idx_end = -(k + 1)
@@ -95,6 +93,35 @@ def _smooth_sf_junction(bestline_utm: np.ndarray, smooth_radius_m: float = 30.0)
         avg = (pts[idx_start] + pts[idx_end]) / 2
         pts[idx_start] = pts[idx_start] * (1 - w) + avg * w
         pts[idx_end] = pts[idx_end] * (1 - w) + avg * w
+
+    # Fix artifacts: remove reversals and resample SF zone uniformly
+    # 1. Fix 180° reversals from resample seam
+    for _ in range(3):
+        for i in range(1, len(pts) - 1):
+            v1 = pts[i] - pts[i - 1]
+            v2 = pts[i + 1] - pts[i]
+            if np.linalg.norm(v1) < 0.01 or np.linalg.norm(v2) < 0.01:
+                continue
+            dh = abs((np.degrees(np.arctan2(v2[1], v2[0]) - np.arctan2(v1[1], v1[0])) + 180) % 360 - 180)
+            if dh > 90:
+                pts[i] = (pts[i - 1] + pts[i + 1]) / 2
+
+    # 2. Resample SF zone to fix uneven spacing from mirror averaging
+    n_zone = n_blend + 2
+    zone_idx = list(range(n - n_zone, n)) + list(range(n_zone))
+    zone_pts = pts[zone_idx]
+    arc = np.zeros(len(zone_pts))
+    for i in range(1, len(zone_pts)):
+        arc[i] = arc[i - 1] + np.linalg.norm(zone_pts[i] - zone_pts[i - 1])
+    if arc[-1] > 0:
+        s_new = np.linspace(0, arc[-1], len(zone_pts))
+        for i, idx in enumerate(zone_idx):
+            pts[idx, 0] = np.interp(s_new[i], arc, zone_pts[:, 0])
+            pts[idx, 1] = np.interp(s_new[i], arc, zone_pts[:, 1])
+
+    # Remove closing duplicate if present (save_bestline adds it back)
+    if np.allclose(pts[0], pts[-1], atol=0.01):
+        pts = pts[:-1]
 
     return pts
 
