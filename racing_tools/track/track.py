@@ -808,11 +808,14 @@ class Track:
             gpx.tracks.append(track)
             segment = gpxpy.gpx.GPXTrackSegment()
             track.segments.append(segment)
-            # Add altitude for bestline if available
+            # Add altitude and time for bestline if available
             alts = self.bestline_alt if name == "bestline" and self.bestline_alt else None
+            from datetime import datetime, timedelta
+            base_time = datetime(2026, 1, 1)
             for i, (lon, lat) in enumerate(coords):
                 ele = round(alts[i], 1) if alts and i < len(alts) else None
-                segment.points.append(gpxpy.gpx.GPXTrackPoint(latitude=lat, longitude=lon, elevation=ele))
+                t = base_time + timedelta(seconds=i * 0.05) if name == "bestline" else None
+                segment.points.append(gpxpy.gpx.GPXTrackPoint(latitude=lat, longitude=lon, elevation=ele, time=t))
 
             path = output_dir / f"{name}.gpx"
             path.write_text(gpx.to_xml(), encoding="utf-8")
@@ -1040,9 +1043,18 @@ class Track:
             footer = b'<' + tag + struct.pack('<BB', checksum & 0xFF, (checksum >> 8) & 0xFF) + b'>'
             return header + payload + footer
 
+        # Load metadata from track_config if available
+        import json as _json
+        _config = {}
+        _cfg_path = output_path.parent.parent.parent / "track_config.json" if output_path else None
+        if _cfg_path and Path(_cfg_path).exists():
+            _config = _json.loads(Path(_cfg_path).read_text())
+
         file_id = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
-        vname = venue_name or self.name or "Track"
-        tname = track_name or vname
+        vname = venue_name or self.name or _config.get("name", "Track")
+        tname = track_name or _config.get("full_name", vname)
+        country_code = country_code.strip() or _config.get("country", "")
+        timezone = timezone or _config.get("timezone", "")
         bestline_length = bestline_line.length
 
         # Center point
@@ -1131,10 +1143,21 @@ class Track:
         ])
         lgo_payload = lgo_filename + minimal_jpeg
 
-        # === plus (XML) ===
+        # === plus (XML from track_config metadata) ===
+        import json as _json2
+        config = {}
+        config_path = output_path.parent.parent.parent / "track_config.json"
+        if config_path.exists():
+            config = _json2.loads(config_path.read_text())
         xml = '<?xml version="1.0" encoding="utf-8"?>\n<DplRoot>\n  <a>\n'
-        xml += f'    <p n="Cty"></p>\n'
-        xml += f'    <p n="Adr"></p>\n'
+        xml += f'    <p n="Cty">{config.get("city", "")}</p>\n'
+        xml += f'    <p n="Adr">{config.get("address", "")}</p>\n'
+        if config.get("postal_code"):
+            xml += f'    <p n="Pco">{config["postal_code"]}</p>\n'
+        if config.get("phone"):
+            xml += f'    <p n="Tel">{config["phone"]}</p>\n'
+        if config.get("url"):
+            xml += f'    <p n="Url">{config["url"]}</p>\n'
         xml += '  </a>\n</DplRoot>\n'
         plus_payload = xml.encode('utf-8')
 
