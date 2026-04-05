@@ -647,8 +647,8 @@ class Track:
             track._centerline_coords = centerline_utm
 
         # Calculate and log start-finish intersection
-        if track.start_finish_intersection:
-            intersection = track.start_finish_intersection
+        intersection = track.start_finish_intersection
+        if intersection:
             logger.info(f"Start-finish intersection at {intersection['centerline_distance']:.1f}m")
             if "bestline_distance" in intersection:
                 logger.info(f"Bestline crossing at {intersection['bestline_distance']:.1f}m")
@@ -676,7 +676,8 @@ class Track:
         if bestline_wgs84:
             bestline_arr_wgs84 = np.array(bestline_wgs84)
             transformer = get_transformer(WGS84_CRS, self.utm_zone)
-            self.bestline_utm = list(map(tuple, transformer.transform(bestline_arr_wgs84[:, 0], bestline_arr_wgs84[:, 1])))
+            xs, ys = transformer.transform(bestline_arr_wgs84[:, 0], bestline_arr_wgs84[:, 1])
+            self.bestline_utm = list(map(tuple, np.column_stack([xs, ys])))
             logger.info(f"Loaded bestline with {len(self.bestline_utm)} points from {directory}")
             return True
         return False

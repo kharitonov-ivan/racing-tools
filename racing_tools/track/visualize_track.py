@@ -310,8 +310,8 @@ def main():
     parser = argparse.ArgumentParser(description="Visualize track geometry with satellite imagery")
     parser.add_argument("track_dir", type=str, help="Path to track directory containing GeoJSON files")
     parser.add_argument("-o", "--output", type=str, default=None, help="Output path for saving visualization (default: show interactively)")
-    parser.add_argument("--size", type=int, nargs=2, default=[32, 24], metavar=("WIDTH", "HEIGHT"), help="Figure size in inches (default: 16 12)")
-    parser.add_argument("--dpi", type=int, default=300, help="Resolution for saved figure (default: 150)")
+    parser.add_argument("--size", type=int, nargs=2, default=[32, 24], metavar=("WIDTH", "HEIGHT"), help="Figure size in inches (default: 32 24)")
+    parser.add_argument("--dpi", type=int, default=300, help="Resolution for saved figure (default: 300)")
     parser.add_argument("--show", action="store_true", help="Show plot interactively instead of saving")
 
     args = parser.parse_args()

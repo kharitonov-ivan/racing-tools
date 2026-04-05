@@ -64,7 +64,7 @@ def _extract_best_lap_gps(session: Session) -> dict | None:
     return {"lap_id": lap_id, "lap_time": lap_time, "lons": lons, "lats": lats, "alts": alts}
 
 
-def _smooth_sf_junction(bestline_utm: np.ndarray, sf_utm: list[tuple], smooth_radius_m: float = 30.0) -> np.ndarray:
+def _smooth_sf_junction(bestline_utm: np.ndarray, smooth_radius_m: float = 30.0) -> np.ndarray:
     """Smooth the bestline at the start/finish line junction.
 
     The lap GPS data starts and ends at SF, creating two slightly different
@@ -161,7 +161,7 @@ def main(argv: list[str] | None = None) -> None:
         "--smooth-radius",
         type=float,
         default=60.0,
-        help="Smoothing radius around SF junction in meters (default: 15)",
+        help="Smoothing radius around SF junction in meters (default: 60)",
     )
     args = parser.parse_args(argv)
 
@@ -218,7 +218,7 @@ def main(argv: list[str] | None = None) -> None:
     sf_utm = track.sectors_utm.get("SF")
     if sf_utm and track.bestline_utm:
         bestline_arr = np.array(track.bestline_utm)
-        smoothed = _smooth_sf_junction(bestline_arr, sf_utm, smooth_radius_m=args.smooth_radius)
+        smoothed = _smooth_sf_junction(bestline_arr, smooth_radius_m=args.smooth_radius)
         track.bestline_utm = list(map(tuple, smoothed))
         print(f"[Bestline] Smoothed SF junction (radius={args.smooth_radius}m)")
 
