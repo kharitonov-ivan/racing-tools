@@ -21,6 +21,66 @@ from racing_tools.session.normalizer import ChannelNormalizer
 from racing_tools.session.utils import infer_datetime_from_path, name_tokens
 
 
+def _to_signed16(v: int) -> int:
+    return v - 65536 if v > 32767 else v
+
+
+def _expand_25hz(frame: pd.DataFrame) -> tuple[pd.DataFrame, float]:
+    """Interleave 25Hz GPS/Speed midpoint samples with 10Hz rows to get ~20Hz.
+
+    Returns (expanded_frame, effective_frequency_hz).
+    If no 25Hz columns are present, returns the frame unchanged at 10Hz.
+    """
+    has_gps = "Lat. 25Hz" in frame.columns and "Lon. 25Hz" in frame.columns
+    has_speed = "Speed GPS 25Hz" in frame.columns
+
+    if not has_gps and not has_speed:
+        return frame, 1.0 / STEP
+
+    # Build midpoint rows from row 1 onwards (row 0 has no previous row)
+    mid = pd.DataFrame(index=range(1, len(frame)))
+    mid["Time"] = frame["Time"].values[1:] - 0.05
+
+    # Copy Partiel (lap number) from the current row
+    mid["Partiel"] = frame["Partiel"].values[1:]
+
+    if has_gps:
+        lat_raw = frame["Lat."].values
+        lon_raw = frame["Lon."].values
+        lat_delta = frame["Lat. 25Hz"].apply(_to_signed16).values
+        lon_delta = frame["Lon. 25Hz"].apply(_to_signed16).values
+        mid["Lat."] = lat_raw[1:] + lat_delta[1:]
+        mid["Lon."] = lon_raw[1:] + lon_delta[1:]
+
+    if has_speed:
+        mid["Speed GPS"] = frame["Speed GPS 25Hz"].values[1:]
+
+    # For other columns (RPM, Altitude, Gf, Orientation, etc.) interpolate later via NaN
+    # Tag rows for identification
+    frame = frame.copy()
+    frame["_is_mid"] = False
+    mid["_is_mid"] = True
+
+    # Interleave and sort by time
+    expanded = pd.concat([frame, mid], ignore_index=True)
+    expanded = expanded.sort_values("Time", kind="mergesort").reset_index(drop=True)
+
+    # Interpolate non-GPS columns that are NaN in midpoint rows
+    for col in expanded.columns:
+        if col in ("Time", "Partiel", "_is_mid", "Lat.", "Lon.", "Speed GPS",
+                   "Lat. 25Hz", "Lon. 25Hz", "Speed GPS 25Hz"):
+            continue
+        if expanded[col].dtype.kind in "fi":
+            expanded[col] = expanded[col].interpolate(method="linear")
+
+    # Drop consumed 25Hz columns and tag
+    for col in ("Lat. 25Hz", "Lon. 25Hz", "Speed GPS 25Hz", "_is_mid"):
+        if col in expanded.columns:
+            expanded.drop(columns=col, inplace=True)
+
+    return expanded, 1.0 / 0.05
+
+
 def load_raw(folder: Path, normalize: bool = True) -> tuple[pd.DataFrame, dict]:
     folder = Path(folder)
     if not folder.is_dir():
@@ -43,19 +103,14 @@ def load_raw(folder: Path, normalize: bool = True) -> tuple[pd.DataFrame, dict]:
     frame = pd.concat(frames, ignore_index=True)
     frame.insert(0, "Time", np.arange(len(frame)) * STEP)
 
-    # TODO: Expand high-frequency sub-channels to increase effective sample rate.
-    #   Raw LAP CSVs contain additional columns that provide intermediate samples
-    #   between 10Hz rows (value in row N measured between rows N-1 and N):
-    #   - "Speed GPS 25Hz": direct speed value (÷10), place at midpoint → ~20Hz
-    #   - "Lat. 25Hz" / "Lon. 25Hz": signed 16-bit deltas in microdegrees,
-    #     reconstruct position = row_pos + delta → ~20Hz GPS track
-    #   - "RPM 1 20Hz".."RPM 5 50Hz": 5 sub-samples at 0.02s intervals → 50Hz RPM
-    #     (device-dependent, e.g. present on SN1061 but not SN3476)
-    #   See experiments/alfano-log-zip-format/ALFANO7_FORMAT.md for full protocol docs.
+    # Expand 25Hz GPS/Speed sub-channels to ~20Hz by interleaving midpoint samples.
+    # 25Hz value in row N was measured between rows N-1 and N (at time - 0.05s).
+    # See experiments/alfano-log-zip-format/ALFANO7_FORMAT.md for protocol docs.
+    frame, effective_freq = _expand_25hz(frame)
 
     if normalize:
         frame = ChannelNormalizer(device_type="alfano").normalize_dataframe(frame)
-    frame = ensure_distance(frame, distance_keys=DISTANCE_KEYS, speed_keys=SPEED_KEYS, frequency=1.0 / STEP)
+    frame = ensure_distance(frame, distance_keys=DISTANCE_KEYS, speed_keys=SPEED_KEYS, frequency=effective_freq)
 
     device = detect_device(files)
     driver = ""

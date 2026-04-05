@@ -1,0 +1,38 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {"name": "SF"},
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [44.94942755937227, 41.56628430428288],
+          [44.94950525688224, 41.56634924317704]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {"name": "S1"},
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [44.94969706163234, 41.56670587560716],
+          [44.94977099880806, 41.56675527485275]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {"name": "S2"},
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [44.94782213341544, 41.56771826532729],
+          [44.94791373020274, 41.56773349413979]
+        ]
+      }
+    }
+  ]
+}

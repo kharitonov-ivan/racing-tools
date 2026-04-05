@@ -39,8 +39,8 @@ def plot_track(
     track: Track,
     track_dir: Path,
     output_path: Path = None,
-    figsize: tuple = (16, 12),
-    dpi: int = 150,
+    figsize: tuple = (32, 24),
+    dpi: int = 300,
     save_to_track_dir: bool = True,
 ):
     """
@@ -137,18 +137,54 @@ def plot_track(
         bestline_webmerc = transform_coordinates(bestline_arr, WGS84_CRS, WEBMERCATOR_CRS)
         ax.plot(bestline_webmerc[:, 0], bestline_webmerc[:, 1], "g-", linewidth=2, label="Bestline (Racing Line)", alpha=0.8)
 
-    # Plot start/finish line
-    if track.start_finish_wgs84:
-        sf_arr = np.array(track.start_finish_wgs84)
-        sf_webmerc = transform_coordinates(sf_arr, WGS84_CRS, WEBMERCATOR_CRS)
-        ax.plot(sf_webmerc[:, 0], sf_webmerc[:, 1], "y-", linewidth=4, label="Start/Finish")
+    # Plot sector lines (SF, S1, S2, ...) with coordinate labels
+    sector_colors = {"SF": "yellow", "S1": "orange", "S2": "lime"}
+    transformer_to_wgs84 = track._get_transformer_to_wgs84()
+    for sector_name in track.sectors_utm:
+        sector_wgs84 = track.get_sector_wgs84(sector_name)
+        if not sector_wgs84:
+            continue
+        sector_arr = np.array(sector_wgs84)
+        sector_webmerc = transform_coordinates(sector_arr, WGS84_CRS, WEBMERCATOR_CRS)
+        color = sector_colors.get(sector_name, "white")
+        ax.plot(sector_webmerc[:, 0], sector_webmerc[:, 1], "-", color=color, linewidth=4, label=sector_name)
+        # Label with name + endpoint coordinates
+        p1_lat, p1_lon = sector_wgs84[0][1], sector_wgs84[0][0]
+        p2_lat, p2_lon = sector_wgs84[-1][1], sector_wgs84[-1][0]
+        mid = sector_webmerc.mean(axis=0)
+        label_text = (f"{sector_name}\n"
+                      f"({p1_lat:.6f}, {p1_lon:.6f})\n"
+                      f"({p2_lat:.6f}, {p2_lon:.6f})")
+        ax.text(mid[0], mid[1], label_text, fontsize=8, fontweight="bold", color="black",
+                bbox=dict(boxstyle="round,pad=0.3", facecolor=color, alpha=0.85), zorder=5)
 
-        # Mark intersection point
-        if track.start_finish_intersection:
-            intersection = track.start_finish_intersection
-            point_utm = np.array(intersection["point"])
-            point_webmerc = transform_coordinates(point_utm.reshape(1, 2), track.utm_zone, WEBMERCATOR_CRS).flatten()
-            ax.plot(point_webmerc[0], point_webmerc[1], "yo", markersize=12, markeredgecolor="black", markeredgewidth=2, label="SF Intersection")
+    # Plot sector-bestline intersection points with coordinate labels
+    if track.bestline_utm and track.sectors_utm:
+        bestline_line = LineString(track.bestline_utm)
+        for sector_name, sector_pts in track.sectors_utm.items():
+            sector_line = LineString(sector_pts)
+            ix = sector_line.intersection(bestline_line)
+            if ix.is_empty:
+                sector_mid = sector_line.interpolate(0.5, normalized=True)
+                proj_pt = bestline_line.interpolate(bestline_line.project(sector_mid))
+            elif ix.geom_type == "Point":
+                proj_pt = ix
+            else:
+                proj_pt = ix.geoms[0] if hasattr(ix, 'geoms') else ix
+            dist_m = bestline_line.project(proj_pt)
+            pt_utm = np.array([[proj_pt.x, proj_pt.y]])
+            pt_webmerc = transform_coordinates(pt_utm, track.utm_zone, WEBMERCATOR_CRS).flatten()
+            lon, lat = transformer_to_wgs84.transform(proj_pt.x, proj_pt.y)
+            color = sector_colors.get(sector_name, "white")
+            ax.plot(pt_webmerc[0], pt_webmerc[1], "o", color=color, markersize=10,
+                    markeredgecolor="black", markeredgewidth=2, zorder=6)
+            ax.annotate(f"{sector_name} x bestline\n({lat:.6f}, {lon:.6f})\n{dist_m:.1f}m",
+                        xy=(pt_webmerc[0], pt_webmerc[1]),
+                        xytext=(15, -25), textcoords="offset points",
+                        fontsize=7, color="black",
+                        bbox=dict(boxstyle="round,pad=0.2", facecolor="white", edgecolor=color, alpha=0.9),
+                        arrowprops=dict(arrowstyle="->", color="black", lw=1),
+                        zorder=7)
 
     # Plot segments (straights and turns) with highlighter style
     if track.segments:
@@ -157,7 +193,6 @@ def plot_track(
             seg_webmerc = transform_coordinates(seg_points, track.utm_zone, WEBMERCATOR_CRS)
 
             # Create LineString for fill_between
-            from shapely.geometry import LineString
 
             seg_line = LineString(seg_webmerc)
 
@@ -275,8 +310,8 @@ def main():
     parser = argparse.ArgumentParser(description="Visualize track geometry with satellite imagery")
     parser.add_argument("track_dir", type=str, help="Path to track directory containing GeoJSON files")
     parser.add_argument("-o", "--output", type=str, default=None, help="Output path for saving visualization (default: show interactively)")
-    parser.add_argument("--size", type=int, nargs=2, default=[16, 12], metavar=("WIDTH", "HEIGHT"), help="Figure size in inches (default: 16 12)")
-    parser.add_argument("--dpi", type=int, default=150, help="Resolution for saved figure (default: 150)")
+    parser.add_argument("--size", type=int, nargs=2, default=[32, 24], metavar=("WIDTH", "HEIGHT"), help="Figure size in inches (default: 16 12)")
+    parser.add_argument("--dpi", type=int, default=300, help="Resolution for saved figure (default: 150)")
     parser.add_argument("--show", action="store_true", help="Show plot interactively instead of saving")
 
     args = parser.parse_args()
