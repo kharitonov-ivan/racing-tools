@@ -137,6 +137,9 @@ class Track:
         self.bestline_utm = bestline_utm
         self.bestline_alt: list[float] | None = None
 
+        # Precomputed sector-bestline intersections: {name: (lat, lon, distance_m)}
+        self.sector_intersections: dict[str, tuple[float, float, float]] = {}
+
         # Track name from config
         self.name = name
 
@@ -761,9 +764,6 @@ class Track:
 
         # Create GeoJSON Feature
         coordinates = [[float(lon), float(lat)] for lon, lat in zip(lons, lats)]
-        # Close the loop if needed
-        if coordinates[0] != coordinates[-1]:
-            coordinates.append(coordinates[0])
 
         geojson = {
             "type": "FeatureCollection",
@@ -900,28 +900,13 @@ class Track:
                 style = sector_style_map.get(sector_name, "sector-default")
                 _add_line(sector_name, coords, style)
 
-        # Sector-bestline intersection points
-        if self.bestline_utm and self.sectors_utm:
-            bestline_line = LineString(self.bestline_utm)
-            transformer = self._get_transformer_to_wgs84()
-            for sector_name, sector_pts in self.sectors_utm.items():
-                sector_line = LineString(sector_pts)
-                ix = sector_line.intersection(bestline_line)
-                if ix.is_empty:
-                    mid = sector_line.interpolate(0.5, normalized=True)
-                    proj_pt = bestline_line.interpolate(bestline_line.project(mid))
-                elif ix.geom_type == "Point":
-                    proj_pt = ix
-                else:
-                    from shapely.geometry import Point as ShapelyPoint
-                    proj_pt = ix.geoms[0] if hasattr(ix, 'geoms') else ShapelyPoint(ix.coords[0])
-                dist_m = bestline_line.project(proj_pt)
-                lon, lat = transformer.transform(proj_pt.x, proj_pt.y)
-                _add_point(
-                    f"{sector_name} x bestline",
-                    float(lon), float(lat),
-                    f"Distance: {dist_m:.1f}m\nLat: {lat:.6f}\nLon: {lon:.6f}",
-                )
+        # Sector-bestline intersection points (from precomputed data)
+        for sector_name, (lat, lon, dist_m) in self.sector_intersections.items():
+            _add_point(
+                f"{sector_name} x bestline",
+                float(lon), float(lat),
+                f"Distance: {dist_m:.1f}m\nLat: {lat:.6f}\nLon: {lon:.6f}",
+            )
 
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1064,9 +1049,10 @@ class Track:
 
         # === Ptkk (268 bytes) ===
         ptkk = bytearray(268)
-        # Name at 0-255 (leave empty like reference)
-        # File ID at 256
-        # ID at offset 260 (4 bytes padding before, matching reference)
+        # Track name at offset 4 (252 bytes, null-padded)
+        tname_bytes = tname.encode('utf-8')[:252]
+        ptkk[4:4+len(tname_bytes)] = tname_bytes
+        # File ID at offset 260
         ptkk[260:260+len(file_id)] = file_id.encode('ascii')
 
         # === Vnfo (476 bytes) ===
@@ -1075,6 +1061,10 @@ class Track:
         vnfo[:len(vname_bytes)] = vname_bytes
         cc = country_code.encode('ascii')[:2].ljust(2)
         vnfo[28:30] = cc
+        # Track ID at @36 (hash of venue name for reproducibility)
+        import hashlib
+        track_id = int.from_bytes(hashlib.md5(vname.encode()).digest()[:4], 'little')
+        struct.pack_into('<I', vnfo, 36, track_id)
         struct.pack_into('<f', vnfo, 44, bestline_length)
         struct.pack_into('<i', vnfo, 48, _coord_i32(center_lat))
         struct.pack_into('<i', vnfo, 52, _coord_i32(center_lon))
@@ -1109,39 +1099,47 @@ class Track:
             alt = alts[i] if i < len(alts) else 0.0
             pts_payload += struct.pack('<iii', _coord_i32(lat), _coord_i32(lon), int(round(alt * 1000)))
 
-        # === zots (408 bytes) ===
+        # === zots (408 bytes) — timezone in fixed 64-byte fields ===
         zots = bytearray(408)
         tz = timezone or "UTC"
-        tz_bytes = tz.encode('utf-8')[:407]
-        zots[:len(tz_bytes)] = tz_bytes
+        # Fields at fixed offsets: @0 tz_id(64), @64 display(64), @128 code(4)+tz_name(28),
+        # @160 standard(32), @192 daylight(32)
+        tz_fields = _config.get("timezone_fields", {})
+        def _put_tz(offset, text, size):
+            b = text.encode('utf-8')[:size-1]
+            zots[offset:offset+len(b)] = b
+
+        _put_tz(0, tz, 64)
+        _put_tz(64, tz_fields.get("display", ""), 64)
+        _put_tz(128, tz_fields.get("code", ""), 4)
+        _put_tz(132, tz_fields.get("name", ""), 28)
+        _put_tz(164, tz_fields.get("standard", ""), 32)
+        _put_tz(196, tz_fields.get("daylight", ""), 32)
 
         # === srfs (4 bytes) ===
         srfs = struct.pack('<I', 1)
 
-        # === lgo (minimal — empty filename + no JPEG) ===
-        lgo_filename = f"{file_id}.logo.jpg\x00".encode('ascii')
-        # Minimal 1x1 white JPEG
-        minimal_jpeg = bytes([
-            0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01,
-            0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0xFF, 0xDB, 0x00, 0x43,
-            0x00, 0x08, 0x06, 0x06, 0x07, 0x06, 0x05, 0x08, 0x07, 0x07, 0x07, 0x09,
-            0x09, 0x08, 0x0A, 0x0C, 0x14, 0x0D, 0x0C, 0x0B, 0x0B, 0x0C, 0x19, 0x12,
-            0x13, 0x0F, 0x14, 0x1D, 0x1A, 0x1F, 0x1E, 0x1D, 0x1A, 0x1C, 0x1C, 0x20,
-            0x24, 0x2E, 0x27, 0x20, 0x22, 0x2C, 0x23, 0x1C, 0x1C, 0x28, 0x37, 0x29,
-            0x2C, 0x30, 0x31, 0x34, 0x34, 0x34, 0x1F, 0x27, 0x39, 0x3D, 0x38, 0x32,
-            0x3C, 0x2E, 0x33, 0x34, 0x32, 0xFF, 0xC0, 0x00, 0x0B, 0x08, 0x00, 0x01,
-            0x00, 0x01, 0x01, 0x01, 0x11, 0x00, 0xFF, 0xC4, 0x00, 0x1F, 0x00, 0x00,
-            0x01, 0x05, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
-            0x09, 0x0A, 0x0B, 0xFF, 0xC4, 0x00, 0xB5, 0x10, 0x00, 0x02, 0x01, 0x03,
-            0x03, 0x02, 0x04, 0x03, 0x05, 0x05, 0x04, 0x04, 0x00, 0x00, 0x01, 0x7D,
-            0x01, 0x02, 0x03, 0x00, 0x04, 0x11, 0x05, 0x12, 0x21, 0x31, 0x41, 0x06,
-            0x13, 0x51, 0x61, 0x07, 0x22, 0x71, 0x14, 0x32, 0x81, 0x91, 0xA1, 0x08,
-            0xFF, 0xDA, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3F, 0x00, 0x7B, 0x94,
-            0x11, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0xFF, 0xD9,
-        ])
-        lgo_payload = lgo_filename + minimal_jpeg
+        # === lgo (logo image) ===
+        logo_path = _cfg_path.parent / "logo.png" if _cfg_path else None
+        if logo_path and logo_path.exists():
+            img_data = logo_path.read_bytes()
+            ext = logo_path.suffix
+        else:
+            # Minimal 1x1 white JPEG
+            img_data = bytes([
+                0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01,
+                0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0xFF, 0xDB, 0x00, 0x43,
+                0x00, 0x08, 0x06, 0x06, 0x07, 0x06, 0x05, 0x08, 0x07, 0x07, 0x07, 0x09,
+                0x09, 0x08, 0x0A, 0x0C, 0x14, 0x0D, 0x0C, 0x0B, 0x0B, 0x0C, 0x19, 0x12,
+                0x13, 0x0F, 0x14, 0x1D, 0x1A, 0x1F, 0x1E, 0x1D, 0x1A, 0x1C, 0x1C, 0x20,
+                0x24, 0x2E, 0x27, 0x20, 0x22, 0x2C, 0x23, 0x1C, 0x1C, 0x28, 0x37, 0x29,
+                0x2C, 0x30, 0x31, 0x34, 0x34, 0x34, 0x1F, 0x27, 0x39, 0x3D, 0x38, 0x32,
+                0x3C, 0x2E, 0x33, 0x34, 0x32, 0xFF, 0xC0, 0x00, 0x0B, 0x08, 0x00, 0x01,
+                0x00, 0x01, 0x01, 0x01, 0x11, 0x00, 0xFF, 0xD9,
+            ])
+            ext = ".jpg"
+        lgo_filename = f"{file_id}{ext}\x00".encode('ascii')
+        lgo_payload = lgo_filename + img_data
 
         # === plus (XML from track_config metadata) ===
         import json as _json2
@@ -1270,7 +1268,7 @@ class Track:
         print(f"[Track] Exported Alfano track to {output_path} ({len(indices)} pts)")
 
     def save_config(self, track_dir: Path) -> None:
-        """Save track_config.json with computed metadata including SF intersection."""
+        """Save track_config.json with track metadata (not derived from bestline)."""
         import json
 
         config_path = Path(track_dir) / "track_config.json"
@@ -1280,42 +1278,9 @@ class Track:
 
         config["utm_zone"] = self.utm_zone
 
-        sf = self.start_finish_intersection
-        if sf:
-            transformer = self._get_transformer_to_wgs84()
-            pt = sf["point"]
-            lon, lat = transformer.transform(pt[0], pt[1])
-            config["start_finish_point"] = {
-                "lat": round(float(lat), 10),
-                "lon": round(float(lon), 10),
-                "utm": [round(float(pt[0]), 3), round(float(pt[1]), 3)],
-                "bestline_distance_m": round(sf.get("bestline_distance", 0), 3),
-                "centerline_distance_m": round(sf.get("centerline_distance", 0), 3),
-            }
-
-        # Sector distances along bestline
-        if self.bestline_utm and self.sectors_utm:
-            bestline_line = LineString(self.bestline_utm)
-            transformer = self._get_transformer_to_wgs84()
-            sectors_info = {}
-            for sname, spts in self.sectors_utm.items():
-                sector_line = LineString(spts)
-                ix = sector_line.intersection(bestline_line)
-                if not ix.is_empty:
-                    pt = ix if ix.geom_type == "Point" else (ix.geoms[0] if hasattr(ix, 'geoms') else ix)
-                    dist = bestline_line.project(pt)
-                    lon, lat = transformer.transform(pt.x, pt.y)
-                else:
-                    mid = sector_line.interpolate(0.5, normalized=True)
-                    proj = bestline_line.interpolate(bestline_line.project(mid))
-                    dist = bestline_line.project(proj)
-                    lon, lat = transformer.transform(proj.x, proj.y)
-                sectors_info[sname] = {
-                    "lat": round(float(lat), 7),
-                    "lon": round(float(lon), 7),
-                    "bestline_distance_m": round(float(dist), 1),
-                }
-            config["sectors"] = sectors_info
+        # Remove derived fields that depend on bestline
+        config.pop("start_finish_point", None)
+        config.pop("sectors", None)
 
         config_path.write_text(json.dumps(config, indent=2) + "\n")
         print(f"[Track] Saved config to {config_path}")

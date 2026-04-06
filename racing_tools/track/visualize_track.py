@@ -153,33 +153,30 @@ def plot_track(
         p2_lat, p2_lon = sector_wgs84[-1][1], sector_wgs84[-1][0]
         mid = sector_webmerc.mean(axis=0)
         label_text = (f"{sector_name}\n"
-                      f"({p1_lat:.6f}, {p1_lon:.6f})\n"
-                      f"({p2_lat:.6f}, {p2_lon:.6f})")
+                      f"({p1_lat:.7f}, {p1_lon:.7f})\n"
+                      f"({p2_lat:.7f}, {p2_lon:.7f})")
         ax.text(mid[0], mid[1], label_text, fontsize=8, fontweight="bold", color="black",
                 bbox=dict(boxstyle="round,pad=0.3", facecolor=color, alpha=0.85), zorder=5)
 
-    # Plot sector-bestline intersection points with coordinate labels
-    if track.bestline_utm and track.sectors_utm:
-        bestline_line = LineString(track.bestline_utm)
-        for sector_name, sector_pts in track.sectors_utm.items():
-            sector_line = LineString(sector_pts)
-            ix = sector_line.intersection(bestline_line)
-            if ix.is_empty:
-                sector_mid = sector_line.interpolate(0.5, normalized=True)
-                proj_pt = bestline_line.interpolate(bestline_line.project(sector_mid))
-            elif ix.geom_type == "Point":
-                proj_pt = ix
-            else:
-                proj_pt = ix.geoms[0] if hasattr(ix, 'geoms') else ix
-            dist_m = bestline_line.project(proj_pt)
-            pt_utm = np.array([[proj_pt.x, proj_pt.y]])
-            pt_webmerc = transform_coordinates(pt_utm, track.utm_zone, WEBMERCATOR_CRS).flatten()
-            lon, lat = transformer_to_wgs84.transform(proj_pt.x, proj_pt.y)
+    # Load sector intersections from generated_track_info.json if not on track object
+    if not track.sector_intersections:
+        import json
+        gen_path = track_dir / "geometry" / "generated_track_info.json"
+        if gen_path.exists():
+            gen_info = json.loads(gen_path.read_text())
+            for sname, sdata in gen_info.get("sectors", {}).items():
+                track.sector_intersections[sname] = (sdata["lat"], sdata["lon"], sdata["bestline_distance_m"])
+
+    # Plot sector-bestline intersection points
+    if track.sector_intersections:
+        transformer_webmerc = get_transformer(WGS84_CRS, WEBMERCATOR_CRS)
+        for sector_name, (lat, lon, dist_m) in track.sector_intersections.items():
+            wx, wy = transformer_webmerc.transform(lon, lat)
             color = sector_colors.get(sector_name, "white")
-            ax.plot(pt_webmerc[0], pt_webmerc[1], "o", color=color, markersize=10,
+            ax.plot(wx, wy, "o", color=color, markersize=10,
                     markeredgecolor="black", markeredgewidth=2, zorder=6)
-            ax.annotate(f"{sector_name} x bestline\n({lat:.6f}, {lon:.6f})\n{dist_m:.1f}m",
-                        xy=(pt_webmerc[0], pt_webmerc[1]),
+            ax.annotate(f"{sector_name} x bestline\n({lat:.7f}, {lon:.7f})\n{dist_m:.1f}m",
+                        xy=(wx, wy),
                         xytext=(15, -25), textcoords="offset points",
                         fontsize=7, color="black",
                         bbox=dict(boxstyle="round,pad=0.2", facecolor="white", edgecolor=color, alpha=0.9),

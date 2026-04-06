@@ -64,92 +64,153 @@ def _extract_best_lap_gps(session: Session) -> dict | None:
     return {"lap_id": lap_id, "lap_time": lap_time, "lons": lons, "lats": lats, "alts": alts}
 
 
-def _smooth_sf_junction(bestline_utm: np.ndarray, smooth_radius_m: float = 30.0) -> np.ndarray:
-    """Smooth the bestline at the start/finish line junction.
+def _build_bestline(
+    gps_utm: np.ndarray,
+    sf_utm: list[tuple],
+    n_samples: int = 512,
+    alts: np.ndarray | None = None,
+) -> tuple[np.ndarray, list[float] | None]:
+    """Build bestline from raw GPS data, starting exactly at SF.
 
-    The lap GPS data starts and ends at SF, creating two slightly different
-    paths. This averages the "approaching" and "leaving" trajectories,
-    then resamples the SF zone uniformly to eliminate spacing artifacts.
+    1. Find where raw GPS crosses the SF line
+    2. Trim data to start at that crossing
+    3. Resample adaptively (more points in curves, fewer on straights)
+    4. End trails off toward SF without forced closure
+
+    Returns (bestline_utm, bestline_alt).
     """
-    from scipy.interpolate import CubicSpline
+    from scipy.signal import savgol_filter
 
-    pts = bestline_utm.copy()
-    n = len(pts)
-
-    # Compute spacing
-    total_length = sum(np.linalg.norm(pts[i] - pts[i - 1]) for i in range(1, n))
-    avg_spacing = total_length / n
-    n_blend = max(4, int(smooth_radius_m / avg_spacing))
-    n_blend = min(n_blend, n // 4)
-
-    # Average mirror points near SF
-    for k in range(n_blend):
-        w = 1.0 - k / n_blend
-        w = w * w
-
-        idx_start = k
-        idx_end = -(k + 1)
-
-        avg = (pts[idx_start] + pts[idx_end]) / 2
-        pts[idx_start] = pts[idx_start] * (1 - w) + avg * w
-        pts[idx_end] = pts[idx_end] * (1 - w) + avg * w
-
-    # Fix artifacts: remove reversals and resample SF zone uniformly
-    # 1. Fix 180° reversals from resample seam
-    for _ in range(3):
-        for i in range(1, len(pts) - 1):
-            v1 = pts[i] - pts[i - 1]
-            v2 = pts[i + 1] - pts[i]
-            if np.linalg.norm(v1) < 0.01 or np.linalg.norm(v2) < 0.01:
-                continue
-            dh = abs((np.degrees(np.arctan2(v2[1], v2[0]) - np.arctan2(v1[1], v1[0])) + 180) % 360 - 180)
-            if dh > 90:
-                pts[i] = (pts[i - 1] + pts[i + 1]) / 2
-
-    # 2. Resample SF zone to fix uneven spacing from mirror averaging
-    n_zone = n_blend + 2
-    zone_idx = list(range(n - n_zone, n)) + list(range(n_zone))
-    zone_pts = pts[zone_idx]
-    arc = np.zeros(len(zone_pts))
-    for i in range(1, len(zone_pts)):
-        arc[i] = arc[i - 1] + np.linalg.norm(zone_pts[i] - zone_pts[i - 1])
-    if arc[-1] > 0:
-        s_new = np.linspace(0, arc[-1], len(zone_pts))
-        for i, idx in enumerate(zone_idx):
-            pts[idx, 0] = np.interp(s_new[i], arc, zone_pts[:, 0])
-            pts[idx, 1] = np.interp(s_new[i], arc, zone_pts[:, 1])
-
-    # Remove closing duplicate if present (save_bestline adds it back)
-    if np.allclose(pts[0], pts[-1], atol=0.01):
-        pts = pts[:-1]
-
-    return pts
-
-
-def _rotate_to_sf(bestline_utm: np.ndarray, sf_utm: list[tuple]) -> np.ndarray:
-    """Rotate bestline so pts[0] is at the SF line intersection."""
     sf_line = LineString(sf_utm)
-    bl_line = LineString(bestline_utm)
-    ix = sf_line.intersection(bl_line)
 
-    if ix.is_empty:
-        return bestline_utm
+    # Find the GPS point closest to SF near the START of the lap
+    # (not the end — both are close to SF but we want the beginning)
+    dists_to_sf = [sf_line.distance(Point(gps_utm[i])) for i in range(min(50, len(gps_utm)))]
+    start_idx = int(np.argmin(dists_to_sf))
 
-    sf_pt = ix if ix.geom_type == "Point" else (ix.geoms[0] if hasattr(ix, 'geoms') else ix)
-    sf_dist = bl_line.project(sf_pt)
+    # Project that GPS point onto SF line to get the exact SF start point
+    sf_pt = sf_line.interpolate(sf_line.project(Point(gps_utm[start_idx])))
+    sf_xy = np.array([sf_pt.x, sf_pt.y])
 
-    # Find closest point index
-    cum = np.zeros(len(bestline_utm))
-    for i in range(1, len(cum)):
-        cum[i] = cum[i - 1] + np.linalg.norm(bestline_utm[i] - bestline_utm[i - 1])
-    split = np.argmin(np.abs(cum - sf_dist))
+    # Arc distance to the start point
+    sf_dist = 0.0
+    for i in range(1, start_idx + 1):
+        sf_dist += np.linalg.norm(gps_utm[i] - gps_utm[i - 1])
 
-    # Rotate array
-    rotated = np.vstack([bestline_utm[split:], bestline_utm[:split]])
-    # Set first point to exact SF crossing
-    rotated[0] = [sf_pt.x, sf_pt.y]
+    # Compute cumulative arc length of raw GPS
+    n_raw = len(gps_utm)
+    arc_raw = np.zeros(n_raw)
+    for i in range(1, n_raw):
+        arc_raw[i] = arc_raw[i - 1] + np.linalg.norm(gps_utm[i] - gps_utm[i - 1])
+    total_raw = arc_raw[-1]
 
-    return rotated
+    # Find split index closest to SF crossing
+    split = np.argmin(np.abs(arc_raw - sf_dist))
+
+    # Rotate raw GPS: SF crossing point first, then the rest of the lap
+    rotated = np.vstack([
+        [sf_xy],
+        gps_utm[split + 1:],
+        gps_utm[1:split + 1],
+    ])
+
+    # Rotate altitude too
+    if alts is not None and len(alts) == n_raw:
+        sf_alt = np.interp(sf_dist, arc_raw, alts)
+        rotated_alts = np.concatenate([
+            [sf_alt],
+            alts[split + 1:],
+            alts[1:split + 1],
+        ])
+    else:
+        rotated_alts = None
+
+    # Compute curvature for adaptive resampling
+    n_rot = len(rotated)
+    arc_rot = np.zeros(n_rot)
+    for i in range(1, n_rot):
+        arc_rot[i] = arc_rot[i - 1] + np.linalg.norm(rotated[i] - rotated[i - 1])
+    total_rot = arc_rot[-1]
+
+    # Curvature: heading change per meter
+    curvature = np.zeros(n_rot)
+    for i in range(1, n_rot - 1):
+        v1 = rotated[i] - rotated[i - 1]
+        v2 = rotated[i + 1] - rotated[i]
+        if np.linalg.norm(v1) < 0.01 or np.linalg.norm(v2) < 0.01:
+            continue
+        h1 = np.arctan2(v1[1], v1[0])
+        h2 = np.arctan2(v2[1], v2[0])
+        dh = abs((h2 - h1 + np.pi) % (2 * np.pi) - np.pi)
+        seg_len = np.linalg.norm(v1)
+        curvature[i] = dh / seg_len
+
+    # Smooth curvature
+    if n_rot > 15:
+        window = min(15, n_rot // 4 * 2 + 1)
+        if window >= 5 and window % 2 == 1:
+            curvature = savgol_filter(curvature, window, polyorder=2, mode="nearest")
+            curvature = np.maximum(curvature, 0)
+
+    # Build adaptive density: more points where curvature is high
+    # density = 1 + curvature_weight * normalized_curvature
+    curv_max = np.percentile(curvature, 95) if curvature.max() > 0 else 1.0
+    curv_norm = np.clip(curvature / max(curv_max, 1e-6), 0, 1)
+    density = 1.0 + 3.0 * curv_norm  # 1x on straights, 4x in tight corners
+
+    # Integrate density to get cumulative distribution
+    density_interp = np.interp(np.linspace(0, total_rot, 2000),
+                               arc_rot, density)
+    cum_density = np.cumsum(density_interp)
+    cum_density = cum_density / cum_density[-1]
+
+    # Sample n_samples points according to density
+    s_uniform = np.linspace(0, 1, n_samples)
+    s_arc = np.interp(s_uniform, cum_density, np.linspace(0, total_rot, 2000))
+
+    # Ensure first point is exactly at SF (arc=0)
+    s_arc[0] = 0.0
+
+    # Interpolate coordinates at sampled arc positions
+    result = np.column_stack([
+        np.interp(s_arc, arc_rot, rotated[:, 0]),
+        np.interp(s_arc, arc_rot, rotated[:, 1]),
+    ])
+
+    # Smoothly pull the tail toward SF (pts[0])
+    # Blend toward the extrapolated start direction (not straight to SF)
+    tail_radius_m = 100.0
+    tail_arc = np.zeros(len(result))
+    for i in range(1, len(result)):
+        tail_arc[i] = tail_arc[i - 1] + np.linalg.norm(result[i] - result[i - 1])
+    total_result = tail_arc[-1]
+
+    # Target: extrapolate backward from start of bestline
+    dir_start = result[0] - result[1]
+    dir_start = dir_start / np.linalg.norm(dir_start)
+
+    for i in range(len(result) - 1, 0, -1):
+        dist_from_end = total_result - tail_arc[i]
+        if dist_from_end > tail_radius_m:
+            break
+        # How far from end (0=end, 1=anchor)
+        t = dist_from_end / tail_radius_m
+        # Smooth blend: cubic ease-in (slow start, fast end)
+        w = 1.0 - t * t * t
+        # Target point: SF + extrapolated offset based on distance from end
+        target = result[0] + dir_start * dist_from_end
+        result[i] = result[i] * (1 - w) + target * w
+
+    # Interpolate altitude
+    result_alt = None
+    if rotated_alts is not None:
+        alt_interp = np.interp(s_arc, arc_rot, rotated_alts)
+        window = min(51, n_samples // 4 * 2 + 1)
+        if window >= 5:
+            alt_interp = savgol_filter(alt_interp, window, polyorder=2, mode="nearest")
+        result_alt = alt_interp.tolist()
+
+    return result, result_alt
 
 
 def _compute_sector_intersections(
@@ -165,11 +226,17 @@ def _compute_sector_intersections(
     results = []
 
     for name, sector_pts in sectors_utm.items():
+        # SF is always at distance 0 (bestline starts from SF)
+        if name == "SF":
+            pt0 = bestline_utm[0]
+            lon, lat = transformer_to_wgs84.transform(pt0[0], pt0[1])
+            results.append((name, 0.0, lat, lon))
+            continue
+
         sector_line = LineString(sector_pts)
         intersection = sector_line.intersection(bestline_line)
 
         if intersection.is_empty:
-            # Closest point fallback
             sector_mid = sector_line.interpolate(0.5, normalized=True)
             dist = bestline_line.project(sector_mid)
             proj_pt = bestline_line.interpolate(dist)
@@ -265,16 +332,23 @@ def main(argv: list[str] | None = None) -> None:
 
     print(f"\n[Best] Lap #{result['lap_id']} ({result['lap_time']:.3f}s, {len(result['lons'])} GPS points)")
 
-    track.set_bestline_from_gps(result["lons"], result["lats"], alts=result.get("alts"), n_samples=args.samples)
-
-    # Smooth SF junction and rotate to start at SF crossing
+    # Build bestline: find SF crossing in raw GPS, adaptive resample
     sf_utm = track.sectors_utm.get("SF")
-    if sf_utm and track.bestline_utm:
-        bestline_arr = np.array(track.bestline_utm)
-        smoothed = _smooth_sf_junction(bestline_arr, smooth_radius_m=args.smooth_radius)
-        rotated = _rotate_to_sf(smoothed, sf_utm)
-        track.bestline_utm = list(map(tuple, rotated))
-        print(f"[Bestline] Smoothed SF junction (radius={args.smooth_radius}m)")
+    transformer = track.get_transformer()
+    lons, lats = result["lons"], result["lats"]
+    xs, ys = transformer.transform(lons, lats)
+    gps_utm = np.column_stack([xs, ys])
+
+    if sf_utm:
+        bestline_pts, bestline_alt = _build_bestline(
+            gps_utm, sf_utm, n_samples=args.samples, alts=result.get("alts"),
+        )
+        track.bestline_utm = list(map(tuple, bestline_pts))
+        track.bestline_alt = bestline_alt
+        print(f"[Bestline] Built from SF crossing ({len(bestline_pts)} pts, adaptive resampling)")
+    else:
+        track.set_bestline_from_gps(lons, lats, alts=result.get("alts"), n_samples=args.samples)
+        print(f"[Bestline] Resampled ({args.samples} pts, no SF available)")
 
 
     track.save_bestline(geometry_dir)
@@ -282,13 +356,18 @@ def main(argv: list[str] | None = None) -> None:
     print(f"[Bestline] Saved to {geometry_dir / 'bestline.geojson'}")
     print(f"[Bestline] Length: {bestline_length:.1f}m")
 
-    # Compute sector intersections
+    # Compute sector intersections once and store on track object
     transformer_to_wgs84 = Transformer.from_crs(track.utm_zone, "EPSG:4326", always_xy=True)
 
     if track.sectors_utm:
         intersections = _compute_sector_intersections(
             track.bestline_utm, track.sectors_utm, transformer_to_wgs84,
         )
+        # Store on track for all exporters to use
+        track.sector_intersections = {
+            name: (lat, lon, dist) for name, dist, lat, lon in intersections
+        }
+
         prev_dist = 0.0
         for name, dist, lat, lon in intersections:
             sector_len = dist - prev_dist
@@ -297,6 +376,23 @@ def main(argv: list[str] | None = None) -> None:
         final_len = bestline_length - prev_dist
         print(f"[Final] {prev_dist:.1f}m -> {bestline_length:.1f}m (segment: {final_len:.1f}m)")
 
+        # Save generated track info
+        import json
+        gen_info = {
+            "bestline_length_m": round(bestline_length, 1),
+            "bestline_points": len(track.bestline_utm),
+            "source_session": session_path.name,
+            "source_lap": result["lap_id"],
+            "source_lap_time": round(result["lap_time"], 3),
+            "sectors": {
+                name: {"lat": round(lat, 7), "lon": round(lon, 7), "bestline_distance_m": round(dist, 1)}
+                for name, (lat, lon, dist) in track.sector_intersections.items()
+            },
+        }
+        gen_path = geometry_dir / "generated_track_info.json"
+        gen_path.write_text(json.dumps(gen_info, indent=2) + "\n")
+        print(f"[Info] Saved to {gen_path}")
+
     track.save_config(track_dir)
     print(f"[Config] Saved to {track_dir / 'track_config.json'}")
 
@@ -304,6 +400,11 @@ def main(argv: list[str] | None = None) -> None:
     track.export_gpx(export_dir)
     track.export_kml(export_dir / "track.kml")
     track.export_ztracks(export_dir / f"{track_dir.name}.ztracks", venue_name=track.name)
+
+    # Visualize
+    from racing_tools.track.visualize_track import plot_track
+    plot_track(track, track_dir)
+    print(f"[Viz] Saved to {track_dir / 'track_visualization.png'}")
 
 
 if __name__ == "__main__":
