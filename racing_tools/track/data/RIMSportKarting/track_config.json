@@ -20,5 +20,7 @@
     "name": "Georgia Time",
     "standard": "Georgia Standard Time",
     "daylight": "Georgia Daylight Time"
-  }
+  },
+  "ztracks_id": 0,
+  "ztracks_sig": "000000000000"
 }
