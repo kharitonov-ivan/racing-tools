@@ -126,6 +126,32 @@ def _smooth_sf_junction(bestline_utm: np.ndarray, smooth_radius_m: float = 30.0)
     return pts
 
 
+def _rotate_to_sf(bestline_utm: np.ndarray, sf_utm: list[tuple]) -> np.ndarray:
+    """Rotate bestline so pts[0] is at the SF line intersection."""
+    sf_line = LineString(sf_utm)
+    bl_line = LineString(bestline_utm)
+    ix = sf_line.intersection(bl_line)
+
+    if ix.is_empty:
+        return bestline_utm
+
+    sf_pt = ix if ix.geom_type == "Point" else (ix.geoms[0] if hasattr(ix, 'geoms') else ix)
+    sf_dist = bl_line.project(sf_pt)
+
+    # Find closest point index
+    cum = np.zeros(len(bestline_utm))
+    for i in range(1, len(cum)):
+        cum[i] = cum[i - 1] + np.linalg.norm(bestline_utm[i] - bestline_utm[i - 1])
+    split = np.argmin(np.abs(cum - sf_dist))
+
+    # Rotate array
+    rotated = np.vstack([bestline_utm[split:], bestline_utm[:split]])
+    # Set first point to exact SF crossing
+    rotated[0] = [sf_pt.x, sf_pt.y]
+
+    return rotated
+
+
 def _compute_sector_intersections(
     bestline_utm: list[tuple],
     sectors_utm: dict[str, list[tuple]],
@@ -241,12 +267,13 @@ def main(argv: list[str] | None = None) -> None:
 
     track.set_bestline_from_gps(result["lons"], result["lats"], alts=result.get("alts"), n_samples=args.samples)
 
-    # Smooth SF junction (spline bridge)
+    # Smooth SF junction and rotate to start at SF crossing
     sf_utm = track.sectors_utm.get("SF")
     if sf_utm and track.bestline_utm:
         bestline_arr = np.array(track.bestline_utm)
         smoothed = _smooth_sf_junction(bestline_arr, smooth_radius_m=args.smooth_radius)
-        track.bestline_utm = list(map(tuple, smoothed))
+        rotated = _rotate_to_sf(smoothed, sf_utm)
+        track.bestline_utm = list(map(tuple, rotated))
         print(f"[Bestline] Smoothed SF junction (radius={args.smooth_radius}m)")
 
 
