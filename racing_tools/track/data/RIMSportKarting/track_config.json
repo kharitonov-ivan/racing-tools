@@ -1,16 +1,26 @@
 {
   "version": 1,
   "utm_zone": "EPSG:32638",
-  "name": "RIM Sport Karting",
+  "name": "RIM Karting Full",
   "comment": "UTM Zone 38N for accurate scaling",
-  "start_finish_point": {
-    "lat": 41.5663006209,
-    "lon": 44.949431212,
-    "utm": [
-      495783.696,
-      4601626.139
-    ],
-    "bestline_distance_m": 1288.555,
-    "centerline_distance_m": 1326.452
-  }
+  "direction": "CCW",
+  "full_name": "Rustavi International Motorpark Karting",
+  "country": "GE",
+  "city": "Rustavi",
+  "address": "21 Rustavi Racing Track, Rustavi",
+  "phone": "+995551901515",
+  "postal_code": "3700",
+  "url": "https://rim.ge/karting-3/",
+  "circuit_type": "Karting Track",
+  "surface": "Paved",
+  "timezone": "Asia/Tbilisi",
+  "timezone_fields": {
+    "display": "(UTC+04:00) Tbilisi",
+    "code": "@8",
+    "name": "Georgia Time",
+    "standard": "Georgia Standard Time",
+    "daylight": "Georgia Daylight Time"
+  },
+  "ztracks_id": 0,
+  "ztracks_sig": "000000000000"
 }

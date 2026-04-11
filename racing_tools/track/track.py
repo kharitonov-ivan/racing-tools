@@ -62,32 +62,23 @@ def _determine_utm_zone_from_coords(
 
 class Track:
     """
-    Unified track representation combining layout, start/finish, and centerline.
+    Unified track representation combining layout, sectors, and centerline.
 
     Attributes:
         bounds: Bounding box (xmin, xmax, ymin, ymax) in UTM (property, computed from centerline)
         segments: List of track segments (straights/turns)
-        start_finish_utm: Start/finish line coordinates in UTM
-        start_finish_wgs84: Start/finish line coordinates in WGS84 (property, computed from UTM)
+        sectors_utm: Named sector lines in UTM (e.g. {"SF": [...], "S1": [...], "S2": [...]})
         bestline_utm: Bestline (optimal racing line) in UTM
         bestline_wgs84: Bestline in WGS84 (property, computed from UTM)
         utm_zone: UTM zone EPSG code (auto-determined from WGS84 coordinates)
         total_length: Total track length in meters (property)
         centerline: Centerline coordinates in UTM (property, computed from boundaries)
 
-    Note:
-        - Boundaries are specified in WGS84 (lon/lat) and converted to UTM internally
-        - UTM zone is auto-determined from coordinates unless explicitly provided
-        - WGS84 coordinates and bounds are computed dynamically to avoid duplication
-
     Example:
         >>> track = Track.load("/path/to/track")
         >>> distance = track.project(point_utm)
-        >>> print(f"Track length: {track.total_length:.1f}m")
-        >>> # WGS84 coordinates are computed on-demand
-        >>> sf_wgs84 = track.start_finish_wgs84
-        >>> # Bounds are computed from centerline
-        >>> print(f"Track bounds: {track.bounds}")
+        >>> sf_wgs84 = track.get_sector_wgs84("SF")
+        >>> print(f"Sectors: {list(track.sectors_utm.keys())}")
     """
 
     def __init__(
@@ -96,7 +87,7 @@ class Track:
         outer_boundary_wgs84: Optional[np.ndarray] = None,
         utm_zone: Optional[str] = None,
         segments: Optional[List[Dict]] = None,
-        start_finish_utm: Optional[List[Tuple[float, float]]] = None,
+        sectors_utm: Optional[Dict[str, List[Tuple[float, float]]]] = None,
         bestline_utm: Optional[List[Tuple[float, float]]] = None,
         name: str = "",
     ):
@@ -139,11 +130,15 @@ class Track:
         self.segments = segments
         self._bounds: Optional[Tuple[float, float, float, float]] = None  # Computed dynamically
 
-        # Start/finish line (UTM only, WGS84 computed dynamically)
-        self.start_finish_utm = start_finish_utm
+        # Named sector lines in UTM (e.g. {"SF": [...], "S1": [...], "S2": [...]})
+        self.sectors_utm: Dict[str, List[Tuple[float, float]]] = sectors_utm or {}
 
         # Bestline (UTM only, WGS84 computed dynamically)
         self.bestline_utm = bestline_utm
+        self.bestline_alt: list[float] | None = None
+
+        # Precomputed sector-bestline intersections: {name: (lat, lon, distance_m)}
+        self.sector_intersections: dict[str, tuple[float, float, float]] = {}
 
         # Track name from config
         self.name = name
@@ -194,16 +189,25 @@ class Track:
         """Set bounds explicitly (for caching or manual override)."""
         self._bounds = value
 
-    @property
-    def start_finish_wgs84(self) -> Optional[List[Tuple[float, float]]]:
-        """Start/finish line coordinates in WGS84 (computed from UTM)."""
-        if self.start_finish_utm is None:
+    def get_sector_wgs84(self, name: str) -> Optional[List[Tuple[float, float]]]:
+        """Get sector line coordinates in WGS84 by name."""
+        pts_utm = self.sectors_utm.get(name)
+        if not pts_utm:
             return None
-
         transformer = self._get_transformer_to_wgs84()
-        pts = np.array(self.start_finish_utm)
+        pts = np.array(pts_utm)
         lons, lats = transformer.transform(pts[:, 0], pts[:, 1])
         return list(zip(lons, lats))
+
+    @property
+    def start_finish_wgs84(self) -> Optional[List[Tuple[float, float]]]:
+        """Start/finish line coordinates in WGS84 (shortcut for sectors_utm["SF"])."""
+        return self.get_sector_wgs84("SF")
+
+    @property
+    def start_finish_utm(self) -> Optional[List[Tuple[float, float]]]:
+        """Start/finish line in UTM (shortcut for sectors_utm["SF"])."""
+        return self.sectors_utm.get("SF")
 
     @property
     def bestline_wgs84(self) -> Optional[List[Tuple[float, float]]]:
@@ -239,13 +243,14 @@ class Track:
     @property
     def start_finish_webmerc(self) -> Optional[List[Tuple[float, float]]]:
         """Start/finish line in Web Mercator (EPSG:3857)."""
-        if self.start_finish_utm is None:
+        sf_utm = self.sectors_utm.get("SF")
+        if not sf_utm:
             return None
 
         from pyproj import Transformer
 
         transformer = Transformer.from_crs(self.utm_zone, "EPSG:3857", always_xy=True)
-        pts = np.array(self.start_finish_utm)
+        pts = np.array(sf_utm)
         xs, ys = transformer.transform(pts[:, 0], pts[:, 1])
         return list(zip(xs, ys))
 
@@ -322,11 +327,11 @@ class Track:
                 - 'point': Intersection/closest point in UTM coordinates
             Returns None if no start-finish line defined.
         """
-        if not self.start_finish_utm:
+        if not self.sectors_utm.get("SF"):
             return None
 
         # Convert start-finish to Shapely LineString (use first and last point for line)
-        sf_points = np.array(self.start_finish_utm)
+        sf_points = np.array(self.sectors_utm["SF"])
         if len(sf_points) < 2:
             return None
 
@@ -460,7 +465,8 @@ class Track:
             - track-outer.geojson: Outer track boundary
 
         Optional files:
-            - start-finish.geojson: Start/finish line
+            - sectors.geojson: Named sector lines (SF, S1, S2, ...)
+            - start-finish.geojson: Legacy start/finish line (fallback if no sectors.geojson)
             - bestline.geojson: Optimal racing line
             - track_config.json: Track configuration (UTM zone, name, etc.)
         """
@@ -501,17 +507,31 @@ class Track:
         # Get transformer for WGS84 -> UTM
         transformer = get_transformer(WGS84_CRS, utm_zone)
 
-        # Load start-finish line
+        # Load sector lines (SF, S1, S2, ...)
+        sectors_utm: Dict[str, List[Tuple[float, float]]] = {}
+        sectors_path = geometry_dir / "sectors.geojson"
         sf_path = geometry_dir / "start-finish.geojson"
-        start_finish_utm = None
 
-        if sf_path.exists():
+        if sectors_path.exists():
+            import json as _json
+            with open(sectors_path) as f:
+                sectors_geojson = _json.load(f)
+            for feature in sectors_geojson.get("features", []):
+                sector_name = feature.get("properties", {}).get("name")
+                coords = feature.get("geometry", {}).get("coordinates", [])
+                if sector_name and coords:
+                    lons, lats = zip(*coords)
+                    xs, ys = transformer.transform(np.array(lons), np.array(lats))
+                    sectors_utm[sector_name] = list(zip(xs, ys))
+            logger.info(f"Loaded {len(sectors_utm)} sectors: {list(sectors_utm.keys())}")
+        elif sf_path.exists():
+            # Fallback: legacy start-finish.geojson
             start_finish_wgs84 = load_polyline_geojson(sf_path)
             if start_finish_wgs84:
                 lons, lats = zip(*start_finish_wgs84)
                 xs, ys = transformer.transform(np.array(lons), np.array(lats))
-                start_finish_utm = list(zip(xs, ys))
-                logger.info("Loaded start-finish line")
+                sectors_utm["SF"] = list(zip(xs, ys))
+                logger.info("Loaded start-finish line (legacy fallback)")
 
         # Load bestline
         bestline_path = geometry_dir / "bestline.geojson"
@@ -620,7 +640,7 @@ class Track:
             outer_boundary_wgs84=outer_arr_wgs84,
             utm_zone=utm_zone,
             segments=segments,
-            start_finish_utm=start_finish_utm,
+            sectors_utm=sectors_utm,
             bestline_utm=bestline_utm,
             name=track_name,
         )
@@ -630,8 +650,8 @@ class Track:
             track._centerline_coords = centerline_utm
 
         # Calculate and log start-finish intersection
-        if track.start_finish_intersection:
-            intersection = track.start_finish_intersection
+        intersection = track.start_finish_intersection
+        if intersection:
             logger.info(f"Start-finish intersection at {intersection['centerline_distance']:.1f}m")
             if "bestline_distance" in intersection:
                 logger.info(f"Bestline crossing at {intersection['bestline_distance']:.1f}m")
@@ -659,7 +679,8 @@ class Track:
         if bestline_wgs84:
             bestline_arr_wgs84 = np.array(bestline_wgs84)
             transformer = get_transformer(WGS84_CRS, self.utm_zone)
-            self.bestline_utm = list(map(tuple, transformer.transform(bestline_arr_wgs84[:, 0], bestline_arr_wgs84[:, 1])))
+            xs, ys = transformer.transform(bestline_arr_wgs84[:, 0], bestline_arr_wgs84[:, 1])
+            self.bestline_utm = list(map(tuple, np.column_stack([xs, ys])))
             logger.info(f"Loaded bestline with {len(self.bestline_utm)} points from {directory}")
             return True
         return False
@@ -668,6 +689,7 @@ class Track:
         self,
         lons: np.ndarray,
         lats: np.ndarray,
+        alts: np.ndarray | None = None,
         n_samples: int = 512,
     ) -> None:
         """
@@ -676,15 +698,16 @@ class Track:
         Args:
             lons: Longitude values in degrees, shape (N,)
             lats: Latitude values in degrees, shape (N,)
+            alts: Altitude values in meters, shape (N,) (optional)
             n_samples: Number of samples for resampling
         """
-        import json
         from .utils import resample_linestring, get_transformer
 
         # Filter valid coordinates
         valid_mask = ~(np.isnan(lons) | np.isnan(lats))
         valid_lons = lons[valid_mask]
         valid_lats = lats[valid_mask]
+        valid_alts = alts[valid_mask] if alts is not None else None
 
         if len(valid_lons) < 2:
             logger.warning("Not enough valid GPS points to create bestline")
@@ -698,7 +721,27 @@ class Track:
         # Resample to specified number of points
         bestline_resampled = resample_linestring(bestline_utm_arr, n_samples)
         self.bestline_utm = list(map(tuple, bestline_resampled))
-        logger.info(f"Set bestline from GPS with {len(self.bestline_utm)} points")
+
+        # Resample altitude along the same arc-length parameterization
+        if valid_alts is not None and np.any(valid_alts != 0):
+            arc_orig = np.zeros(len(bestline_utm_arr))
+            for i in range(1, len(arc_orig)):
+                arc_orig[i] = arc_orig[i - 1] + np.linalg.norm(bestline_utm_arr[i] - bestline_utm_arr[i - 1])
+            arc_new = np.zeros(len(bestline_resampled))
+            for i in range(1, len(arc_new)):
+                arc_new[i] = arc_new[i - 1] + np.linalg.norm(bestline_resampled[i] - bestline_resampled[i - 1])
+            from scipy.signal import savgol_filter
+            alt_resampled = np.interp(arc_new, arc_orig, valid_alts)
+            # Heavy smoothing for noisy GPS altitude
+            window = min(51, len(alt_resampled) // 4 * 2 + 1)
+            if window >= 5:
+                alt_resampled = savgol_filter(alt_resampled, window, polyorder=2, mode="wrap")
+            self.bestline_alt = alt_resampled.tolist()
+        else:
+            self.bestline_alt = None
+
+        logger.info(f"Set bestline from GPS with {len(self.bestline_utm)} points" +
+                     (f" (alt {min(self.bestline_alt):.0f}-{max(self.bestline_alt):.0f}m)" if self.bestline_alt else ""))
 
     def save_bestline(self, directory: Path) -> None:
         """
@@ -721,9 +764,6 @@ class Track:
 
         # Create GeoJSON Feature
         coordinates = [[float(lon), float(lat)] for lon, lat in zip(lons, lats)]
-        # Close the loop if needed
-        if coordinates[0] != coordinates[-1]:
-            coordinates.append(coordinates[0])
 
         geojson = {
             "type": "FeatureCollection",
@@ -751,8 +791,10 @@ class Track:
             ("outer-boundary", self._utm_to_wgs84(self._outer_boundary_utm) if self._outer_boundary_utm is not None else None),
             ("centerline", self._utm_to_wgs84(self.centerline) if self.centerline is not None else None),
             ("bestline", self.bestline_wgs84),
-            ("start-finish", self.start_finish_wgs84),
         ]
+        # Export each sector line
+        for sector_name in self.sectors_utm:
+            layers.append((f"sector-{sector_name}", self.get_sector_wgs84(sector_name)))
 
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -766,8 +808,14 @@ class Track:
             gpx.tracks.append(track)
             segment = gpxpy.gpx.GPXTrackSegment()
             track.segments.append(segment)
-            for lon, lat in coords:
-                segment.points.append(gpxpy.gpx.GPXTrackPoint(latitude=lat, longitude=lon))
+            # Add altitude and time for bestline if available
+            alts = self.bestline_alt if name == "bestline" and self.bestline_alt else None
+            from datetime import datetime, timedelta
+            base_time = datetime(2026, 1, 1)
+            for i, (lon, lat) in enumerate(coords):
+                ele = round(alts[i], 1) if alts and i < len(alts) else None
+                t = base_time + timedelta(seconds=i * 0.05) if name == "bestline" else None
+                segment.points.append(gpxpy.gpx.GPXTrackPoint(latitude=lat, longitude=lon, elevation=ele, time=t))
 
             path = output_dir / f"{name}.gpx"
             path.write_text(gpx.to_xml(), encoding="utf-8")
@@ -780,14 +828,447 @@ class Track:
             transformer = self._get_transformer_to_wgs84()
             pt = sf["point"]
             lon, lat = transformer.transform(pt[0], pt[1])
-            gpx_wp.waypoints.append(gpxpy.gpx.GPXWaypoint(latitude=float(lat), longitude=float(lon), name="start-finish"))
-            (output_dir / "start-finish-point.gpx").write_text(gpx_wp.to_xml(), encoding="utf-8")
+            gpx_wp.waypoints.append(gpxpy.gpx.GPXWaypoint(latitude=float(lat), longitude=float(lon), name="SF"))
+            (output_dir / "sector-SF-point.gpx").write_text(gpx_wp.to_xml(), encoding="utf-8")
             exported += 1
 
         print(f"[Track] Exported {exported} GPX files to {output_dir}")
 
+    def export_kml(self, output_path: Path) -> None:
+        """Export track geometry as a single KML file for Google Earth.
+
+        Includes: boundaries, centerline, bestline, sector lines,
+        and sector-bestline intersection points.
+        """
+        from xml.etree.ElementTree import Element, SubElement, tostring
+        from xml.dom.minidom import parseString
+
+        kml = Element("kml", xmlns="http://www.opengis.net/kml/2.2")
+        doc = SubElement(kml, "Document")
+        SubElement(doc, "name").text = self.name or "Track"
+
+        def _add_style(style_id: str, color: str, width: int = 3):
+            style = SubElement(doc, "Style", id=style_id)
+            ls = SubElement(style, "LineStyle")
+            SubElement(ls, "color").text = color
+            SubElement(ls, "width").text = str(width)
+
+        def _add_line(name: str, coords_wgs84: list, style_id: str):
+            pm = SubElement(doc, "Placemark")
+            SubElement(pm, "name").text = name
+            SubElement(pm, "styleUrl").text = f"#{style_id}"
+            ls = SubElement(pm, "LineString")
+            coord_str = " ".join(f"{lon},{lat},0" for lon, lat in coords_wgs84)
+            SubElement(ls, "coordinates").text = coord_str
+
+        def _add_point(name: str, lon: float, lat: float, description: str = ""):
+            pm = SubElement(doc, "Placemark")
+            SubElement(pm, "name").text = name
+            if description:
+                SubElement(pm, "description").text = description
+            pt = SubElement(pm, "Point")
+            SubElement(pt, "coordinates").text = f"{lon},{lat},0"
+
+        # Styles (KML colors are aaBBGGRR)
+        _add_style("boundary", "ffff0000", 2)       # blue
+        _add_style("centerline", "ff0000ff", 2)      # red
+        _add_style("bestline", "ff00ff00", 3)         # green
+        _add_style("sector-SF", "ff00ffff", 4)        # yellow
+        _add_style("sector-S1", "ff00a5ff", 4)        # orange
+        _add_style("sector-S2", "ff00ff00", 4)        # lime
+        _add_style("sector-default", "ffffffff", 4)   # white
+
+        # Boundaries
+        if self._inner_boundary_utm is not None:
+            _add_line("Inner boundary", self._utm_to_wgs84(self._inner_boundary_utm), "boundary")
+        if self._outer_boundary_utm is not None:
+            _add_line("Outer boundary", self._utm_to_wgs84(self._outer_boundary_utm), "boundary")
+
+        # Centerline
+        if self.centerline is not None:
+            _add_line("Centerline", self._utm_to_wgs84(self.centerline), "centerline")
+
+        # Bestline
+        if self.bestline_wgs84:
+            _add_line("Bestline", self.bestline_wgs84, "bestline")
+
+        # Sector lines
+        sector_style_map = {"SF": "sector-SF", "S1": "sector-S1", "S2": "sector-S2"}
+        for sector_name in self.sectors_utm:
+            coords = self.get_sector_wgs84(sector_name)
+            if coords:
+                style = sector_style_map.get(sector_name, "sector-default")
+                _add_line(sector_name, coords, style)
+
+        # Sector-bestline intersection points (from precomputed data)
+        for sector_name, (lat, lon, dist_m) in self.sector_intersections.items():
+            _add_point(
+                f"{sector_name} x bestline",
+                float(lon), float(lat),
+                f"Distance: {dist_m:.1f}m\nLat: {lat:.6f}\nLon: {lon:.6f}",
+            )
+
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        xml_str = parseString(tostring(kml, encoding="unicode")).toprettyxml(indent="  ")
+        # Remove extra XML declaration from minidom
+        lines = xml_str.split("\n")
+        xml_str = "\n".join(lines[1:]) if lines[0].startswith("<?xml") else xml_str
+        output_path.write_text('<?xml version="1.0" encoding="UTF-8"?>\n' + xml_str, encoding="utf-8")
+        print(f"[Track] Exported KML to {output_path}")
+
+    @staticmethod
+    def import_sectors_kml(kml_path: Path) -> dict[str, list[tuple[float, float]]]:
+        """Import named sector lines from a KML file.
+
+        Returns dict of {name: [(lon, lat), ...]} in WGS84.
+        """
+        from xml.etree.ElementTree import parse
+
+        kml_path = Path(kml_path)
+        tree = parse(kml_path)
+        root = tree.getroot()
+
+        # Handle KML namespace
+        ns = ""
+        tag = root.tag
+        if tag.startswith("{"):
+            ns = tag[: tag.index("}") + 1]
+
+        sectors: dict[str, list[tuple[float, float]]] = {}
+        for placemark in root.iter(f"{ns}Placemark"):
+            name_el = placemark.find(f"{ns}name")
+            if name_el is None or not name_el.text:
+                continue
+            name = name_el.text.strip()
+
+            coords_el = placemark.find(f".//{ns}coordinates")
+            if coords_el is None or not coords_el.text:
+                continue
+
+            points = []
+            for part in coords_el.text.strip().split():
+                vals = part.split(",")
+                if len(vals) >= 2:
+                    lon, lat = float(vals[0]), float(vals[1])
+                    points.append((lon, lat))
+
+            if len(points) >= 2:
+                sectors[name] = points
+
+        return sectors
+
+    def load_sectors_from_kml(self, kml_path: Path) -> None:
+        """Load sector lines from KML and set them on this track (transforms to UTM)."""
+        from .utils import get_transformer
+        from .constants import WGS84_CRS
+
+        sectors_wgs84 = self.import_sectors_kml(kml_path)
+        transformer = get_transformer(WGS84_CRS, self.utm_zone)
+
+        for name, coords in sectors_wgs84.items():
+            lons, lats = zip(*coords)
+            xs, ys = transformer.transform(np.array(lons), np.array(lats))
+            self.sectors_utm[name] = list(zip(xs, ys))
+
+        logger.info(f"Loaded {len(sectors_wgs84)} sectors from KML: {list(sectors_wgs84.keys())}")
+
+    def export_ztracks(
+        self,
+        output_path: Path,
+        venue_name: str = "",
+        track_name: str = "",
+        country_code: str = "  ",
+        timezone: str = "",
+    ) -> None:
+        """Export track as AIM RaceStudio3 .ztracks file.
+
+        See experiments/aim-ztracks-format/AIM_ZTRACKS_FORMAT.md for format docs.
+        """
+        import random
+        import string
+        import struct
+        import zipfile
+        from io import BytesIO
+
+        if not self.bestline_utm:
+            logger.warning("No bestline to export")
+            return
+
+        # Bestline to WGS84
+        bestline_wgs84 = self.bestline_wgs84
+        if not bestline_wgs84:
+            return
+
+        # Sector intersection points on bestline
+        sector_pts_wgs84: dict[str, tuple[float, float]] = {}
+        bestline_line = LineString(self.bestline_utm)
+        transformer = self._get_transformer_to_wgs84()
+        for sname, spts in self.sectors_utm.items():
+            sline = LineString(spts)
+            ix = sline.intersection(bestline_line)
+            if not ix.is_empty:
+                pt = ix if ix.geom_type == "Point" else (ix.geoms[0] if hasattr(ix, 'geoms') else ix)
+                lon, lat = transformer.transform(pt.x, pt.y)
+                sector_pts_wgs84[sname] = (float(lat), float(lon))
+            else:
+                mid = sline.interpolate(0.5, normalized=True)
+                proj = bestline_line.interpolate(bestline_line.project(mid))
+                lon, lat = transformer.transform(proj.x, proj.y)
+                sector_pts_wgs84[sname] = (float(lat), float(lon))
+
+        def _coord_i32(deg: float) -> int:
+            return int(round(deg * 1e7))
+
+        def _chunk(tag: bytes, payload: bytes) -> bytes:
+            """Build a TKK chunk: header + data + footer."""
+            size = len(payload)
+            header = b'<h' + tag + struct.pack('<I', size) + b'\x00>'
+            checksum = sum(payload) & 0xFFFF
+            footer = b'<' + tag + struct.pack('<BB', checksum & 0xFF, (checksum >> 8) & 0xFF) + b'>'
+            return header + payload + footer
+
+        # Load metadata from track_config if available
+        import json as _json
+        _config = {}
+        _cfg_path = output_path.parent.parent.parent / "track_config.json" if output_path else None
+        if _cfg_path and Path(_cfg_path).exists():
+            _config = _json.loads(Path(_cfg_path).read_text())
+
+        file_id = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
+        vname = venue_name or self.name or _config.get("name", "Track")
+        tname = track_name or _config.get("full_name", vname)
+        country_code = country_code.strip() or _config.get("country", "")
+        timezone = timezone or _config.get("timezone", "")
+        bestline_length = bestline_line.length
+
+        # Center point
+        pts_arr = np.array(bestline_wgs84)
+        center_lon = float(pts_arr[:, 0].mean())
+        center_lat = float(pts_arr[:, 1].mean())
+
+        # === Ptkk (268 bytes) ===
+        ptkk = bytearray(268)
+        # Track name at offset 4 (252 bytes, null-padded)
+        tname_bytes = tname.encode('utf-8')[:252]
+        ptkk[4:4+len(tname_bytes)] = tname_bytes
+        # File ID at offset 260
+        ptkk[260:260+len(file_id)] = file_id.encode('ascii')
+
+        # === Vnfo (476 bytes) ===
+        vnfo = bytearray(476)
+        vname_bytes = vname.encode('utf-8')[:23]
+        vnfo[:len(vname_bytes)] = vname_bytes
+        cc = country_code.encode('ascii')[:2].ljust(2)
+        vnfo[28:30] = cc
+        # Track ID at @36 (hash of venue name for reproducibility)
+        import hashlib
+        track_id = int.from_bytes(hashlib.md5(vname.encode()).digest()[:4], 'little')
+        struct.pack_into('<I', vnfo, 36, track_id)
+        struct.pack_into('<f', vnfo, 44, bestline_length)
+        struct.pack_into('<i', vnfo, 48, _coord_i32(center_lat))
+        struct.pack_into('<i', vnfo, 52, _coord_i32(center_lon))
+        struct.pack_into('<I', vnfo, 60, 50)
+        sector_names = [s for s in self.sectors_utm if s != "SF"]
+        struct.pack_into('<I', vnfo, 72, len(sector_names))
+        struct.pack_into('<I', vnfo, 76, 0x00040000)
+        # SF at 368
+        if "SF" in sector_pts_wgs84:
+            lat, lon = sector_pts_wgs84["SF"]
+            struct.pack_into('<i', vnfo, 368, _coord_i32(lat))
+            struct.pack_into('<i', vnfo, 372, _coord_i32(lon))
+        # S1 at 384, S2 at 400
+        for idx, sname in enumerate(["S1", "S2"]):
+            if sname in sector_pts_wgs84:
+                lat, lon = sector_pts_wgs84[sname]
+                struct.pack_into('<i', vnfo, 384 + idx * 16, _coord_i32(lat))
+                struct.pack_into('<i', vnfo, 388 + idx * 16, _coord_i32(lon))
+
+        # === V_sw (256 bytes) ===
+        vsw = bytearray(256)
+        tname_bytes = tname.encode('utf-8')[:255]
+        vsw[:len(tname_bytes)] = tname_bytes
+
+        # === Vidx (8 bytes) ===
+        vidx = bytearray(8)
+
+        # === pts (N x 12 bytes) ===
+        pts_payload = bytearray()
+        alts = self.bestline_alt or [0.0] * len(bestline_wgs84)
+        for i, (lon, lat) in enumerate(bestline_wgs84):
+            alt = alts[i] if i < len(alts) else 0.0
+            pts_payload += struct.pack('<iii', _coord_i32(lat), _coord_i32(lon), int(round(alt * 1000)))
+
+        # === zots (408 bytes) — timezone in fixed 64-byte fields ===
+        zots = bytearray(408)
+        tz = timezone or "UTC"
+        # Fields at fixed offsets: @0 tz_id(64), @64 display(64), @128 code(4)+tz_name(28),
+        # @160 standard(32), @192 daylight(32)
+        tz_fields = _config.get("timezone_fields", {})
+        def _put_tz(offset, text, size):
+            b = text.encode('utf-8')[:size-1]
+            zots[offset:offset+len(b)] = b
+
+        _put_tz(0, tz, 64)
+        _put_tz(64, tz_fields.get("display", ""), 64)
+        _put_tz(128, tz_fields.get("code", ""), 4)
+        _put_tz(132, tz_fields.get("name", ""), 28)
+        _put_tz(164, tz_fields.get("standard", ""), 32)
+        _put_tz(196, tz_fields.get("daylight", ""), 32)
+
+        # === srfs (4 bytes) ===
+        srfs = struct.pack('<I', 1)
+
+        # === lgo (logo image) ===
+        logo_path = _cfg_path.parent / "logo.png" if _cfg_path else None
+        if logo_path and logo_path.exists():
+            img_data = logo_path.read_bytes()
+            ext = logo_path.suffix
+        else:
+            # Minimal 1x1 white JPEG
+            img_data = bytes([
+                0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01,
+                0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0xFF, 0xDB, 0x00, 0x43,
+                0x00, 0x08, 0x06, 0x06, 0x07, 0x06, 0x05, 0x08, 0x07, 0x07, 0x07, 0x09,
+                0x09, 0x08, 0x0A, 0x0C, 0x14, 0x0D, 0x0C, 0x0B, 0x0B, 0x0C, 0x19, 0x12,
+                0x13, 0x0F, 0x14, 0x1D, 0x1A, 0x1F, 0x1E, 0x1D, 0x1A, 0x1C, 0x1C, 0x20,
+                0x24, 0x2E, 0x27, 0x20, 0x22, 0x2C, 0x23, 0x1C, 0x1C, 0x28, 0x37, 0x29,
+                0x2C, 0x30, 0x31, 0x34, 0x34, 0x34, 0x1F, 0x27, 0x39, 0x3D, 0x38, 0x32,
+                0x3C, 0x2E, 0x33, 0x34, 0x32, 0xFF, 0xC0, 0x00, 0x0B, 0x08, 0x00, 0x01,
+                0x00, 0x01, 0x01, 0x01, 0x11, 0x00, 0xFF, 0xD9,
+            ])
+            ext = ".jpg"
+        lgo_filename = f"{file_id}{ext}\x00".encode('ascii')
+        lgo_payload = lgo_filename + img_data
+
+        # === plus (XML from track_config metadata) ===
+        import json as _json2
+        config = {}
+        config_path = output_path.parent.parent.parent / "track_config.json"
+        if config_path.exists():
+            config = _json2.loads(config_path.read_text())
+        xml = '<?xml version="1.0" encoding="utf-8"?>\n<DplRoot>\n  <a>\n'
+        xml += f'    <p n="Cty">{config.get("city", "")}</p>\n'
+        xml += f'    <p n="Adr">{config.get("address", "")}</p>\n'
+        if config.get("postal_code"):
+            xml += f'    <p n="Pco">{config["postal_code"]}</p>\n'
+        if config.get("phone"):
+            xml += f'    <p n="Tel">{config["phone"]}</p>\n'
+        if config.get("url"):
+            xml += f'    <p n="Url">{config["url"]}</p>\n'
+        xml += '  </a>\n</DplRoot>\n'
+        plus_payload = xml.encode('utf-8')
+
+        # Build TKK
+        tkk = bytearray()
+        tkk += _chunk(b'Ptkk', bytes(ptkk))
+        tkk += _chunk(b'Vnfo', bytes(vnfo))
+        tkk += _chunk(b'V_sw', bytes(vsw))
+        tkk += _chunk(b'Vidx', bytes(vidx))
+        tkk += _chunk(b'pts\x00', bytes(pts_payload))
+        tkk += _chunk(b'zots', bytes(zots))
+        tkk += _chunk(b'srfs', bytes(srfs))
+        tkk += _chunk(b'lgo\x00', bytes(lgo_payload))
+        tkk += _chunk(b'plus', bytes(plus_payload))
+
+        # Write ZIP
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr(f'{file_id}.tkk', bytes(tkk))
+
+        print(f"[Track] Exported ztracks to {output_path} ({len(bestline_wgs84)} pts, {len(sector_pts_wgs84)} sectors)")
+
+    def export_alfano(self, output_path: Path, track_name: str = "TRACK") -> None:
+        """Export track as .trackALFANO binary for Alfano GPS devices.
+
+        Format: 8192 bytes fixed. Header + points (11 bytes each) + 0xFF padding.
+        See racing_tools/track/data/RIMSportKarting/export/alfano/decode_alfano.py
+        """
+        import struct
+
+        if not self.bestline_utm:
+            logger.warning("No bestline to export")
+            return
+
+        bestline_wgs84 = self.bestline_wgs84
+        if not bestline_wgs84:
+            return
+
+        FILE_SIZE = 8192
+        RECORD_SIZE = 11
+        DATA_OFFSET = 0x7B
+        COORD_SCALE = 1_000_000
+
+        buf = bytearray(b'\xff' * FILE_SIZE)
+
+        # Magic
+        buf[0:5] = b'*P* *'
+
+        # @0x32-0x33: firmware (observed values)
+        buf[0x32] = 5
+        buf[0x33] = 0xDE
+
+        # @0x34: device_id (use 0)
+        struct.pack_into('<H', buf, 0x34, 0)
+
+        # @0x36-0x3B: flags
+        buf[0x36:0x3C] = b'\xff\xff\xff\xff\xff\x03'
+
+        # @0x40-0x44: track name (5 chars, space-padded)
+        name = track_name.upper()[:5].ljust(5)
+        buf[0x40:0x45] = name.encode('ascii')
+
+        # @0x47-0x48: hemisphere
+        pts_arr = np.array(bestline_wgs84)
+        center_lat = float(pts_arr[:, 1].mean())
+        center_lon = float(pts_arr[:, 0].mean())
+        ns = 'N' if center_lat >= 0 else 'S'
+        ew = 'E' if center_lon >= 0 else 'W'
+        buf[0x47:0x49] = f'{ns}{ew}'.encode('ascii')
+
+        # @0x50-0x57: center coordinates (microdegrees)
+        struct.pack_into('<i', buf, 0x50, int(round(center_lat * COORD_SCALE)))
+        struct.pack_into('<i', buf, 0x54, int(round(center_lon * COORD_SCALE)))
+
+        # @0x58: track length (meters, uint16)
+        bestline_length = LineString(self.bestline_utm).length
+        struct.pack_into('<H', buf, 0x58, min(65535, int(round(bestline_length))))
+
+        # Max points that fit
+        max_points = (FILE_SIZE - DATA_OFFSET) // RECORD_SIZE  # = 738
+
+        # Downsample if needed
+        n_pts = len(bestline_wgs84)
+        if n_pts > max_points:
+            step = n_pts / max_points
+            indices = [int(i * step) for i in range(max_points)]
+        else:
+            indices = list(range(n_pts))
+
+        # Data section size
+        data_len = len(indices) * RECORD_SIZE
+        buf[0x78:0x7B] = data_len.to_bytes(3, 'little')
+
+        # Write points
+        alts = self.bestline_alt or [0.0] * n_pts
+        for i, idx in enumerate(indices):
+            lon, lat = bestline_wgs84[idx]
+            alt = alts[idx] if idx < len(alts) else 0.0
+            off = DATA_OFFSET + i * RECORD_SIZE
+
+            struct.pack_into('<i', buf, off, int(round(lat * COORD_SCALE)))
+            struct.pack_into('<i', buf, off + 4, int(round(lon * COORD_SCALE)))
+            struct.pack_into('<H', buf, off + 8, max(0, min(65535, int(round(alt)))))
+            buf[off + 10] = 100  # speed_raw (no telemetry speed)
+
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(bytes(buf))
+        print(f"[Track] Exported Alfano track to {output_path} ({len(indices)} pts)")
+
     def save_config(self, track_dir: Path) -> None:
-        """Save track_config.json with computed metadata including SF intersection."""
+        """Save track_config.json with track metadata (not derived from bestline)."""
         import json
 
         config_path = Path(track_dir) / "track_config.json"
@@ -797,18 +1278,9 @@ class Track:
 
         config["utm_zone"] = self.utm_zone
 
-        sf = self.start_finish_intersection
-        if sf:
-            transformer = self._get_transformer_to_wgs84()
-            pt = sf["point"]
-            lon, lat = transformer.transform(pt[0], pt[1])
-            config["start_finish_point"] = {
-                "lat": round(float(lat), 10),
-                "lon": round(float(lon), 10),
-                "utm": [round(float(pt[0]), 3), round(float(pt[1]), 3)],
-                "bestline_distance_m": round(sf.get("bestline_distance", 0), 3),
-                "centerline_distance_m": round(sf.get("centerline_distance", 0), 3),
-            }
+        # Remove derived fields that depend on bestline
+        config.pop("start_finish_point", None)
+        config.pop("sectors", None)
 
         config_path.write_text(json.dumps(config, indent=2) + "\n")
         print(f"[Track] Saved config to {config_path}")
