@@ -25,60 +25,91 @@ def _to_signed16(v: int) -> int:
     return v - 65536 if v > 32767 else v
 
 
-def _expand_25hz(frame: pd.DataFrame) -> tuple[pd.DataFrame, float]:
-    """Interleave 25Hz GPS/Speed midpoint samples with 10Hz rows to get ~20Hz.
+_RPM_SUB_COLS = ["RPM 1 20Hz", "RPM 2 50Hz", "RPM 3 50Hz", "RPM 4 50Hz", "RPM 5 50Hz"]
+_RPM_SUB_OFFSETS = [0.02, 0.04, 0.06, 0.08, 0.10]  # seconds relative to previous row
 
-    Returns (expanded_frame, effective_frequency_hz).
-    If no 25Hz columns are present, returns the frame unchanged at 10Hz.
+
+def _expand_subchannels(frame: pd.DataFrame) -> pd.DataFrame:
+    """Expand 25Hz GPS/Speed and 50Hz RPM sub-channels into separate rows.
+
+    Sub-channel values in row N were measured between rows N-1 and N.
+    All expanded rows carry only the sub-channel value; other columns are NaN
+    and will be filled by the 100Hz resampling step later.
     """
     has_gps = "Lat. 25Hz" in frame.columns and "Lon. 25Hz" in frame.columns
     has_speed = "Speed GPS 25Hz" in frame.columns
+    has_rpm = all(c in frame.columns for c in _RPM_SUB_COLS)
 
-    if not has_gps and not has_speed:
-        return frame, 1.0 / STEP
+    if not has_gps and not has_speed and not has_rpm:
+        return frame
 
-    # Build midpoint rows from row 1 onwards (row 0 has no previous row)
-    mid = pd.DataFrame(index=range(1, len(frame)))
-    mid["Time"] = frame["Time"].values[1:] - 0.05
+    extra_frames = []
 
-    # Copy Partiel (lap number) from the current row
-    mid["Partiel"] = frame["Partiel"].values[1:]
+    # GPS 25Hz midpoint: measured at -0.05s from current row
+    if has_gps or has_speed:
+        mid = pd.DataFrame(index=range(1, len(frame)))
+        mid["Time"] = frame["Time"].values[1:] - 0.05
+        mid["Partiel"] = frame["Partiel"].values[1:]
+        if has_gps:
+            mid["Lat."] = frame["Lat."].values[1:] + frame["Lat. 25Hz"].apply(_to_signed16).values[1:]
+            mid["Lon."] = frame["Lon."].values[1:] + frame["Lon. 25Hz"].apply(_to_signed16).values[1:]
+        if has_speed:
+            mid["Speed GPS"] = frame["Speed GPS 25Hz"].values[1:]
+        extra_frames.append(mid)
 
-    if has_gps:
-        lat_raw = frame["Lat."].values
-        lon_raw = frame["Lon."].values
-        lat_delta = frame["Lat. 25Hz"].apply(_to_signed16).values
-        lon_delta = frame["Lon. 25Hz"].apply(_to_signed16).values
-        mid["Lat."] = lat_raw[1:] + lat_delta[1:]
-        mid["Lon."] = lon_raw[1:] + lon_delta[1:]
+    # RPM 50Hz: 5 sub-samples at +0.02s intervals between rows N-1 and N
+    if has_rpm:
+        for col, offset in zip(_RPM_SUB_COLS, _RPM_SUB_OFFSETS):
+            rpm_row = pd.DataFrame(index=range(1, len(frame)))
+            rpm_row["Time"] = frame["Time"].values[:-1] + offset
+            rpm_row["Partiel"] = frame["Partiel"].values[1:]
+            rpm_row["RPM"] = frame[col].values[1:]
+            extra_frames.append(rpm_row)
 
-    if has_speed:
-        mid["Speed GPS"] = frame["Speed GPS 25Hz"].values[1:]
+    if not extra_frames:
+        return frame
 
-    # For other columns (RPM, Altitude, Gf, Orientation, etc.) interpolate later via NaN
-    # Tag rows for identification
-    frame = frame.copy()
-    frame["_is_mid"] = False
-    mid["_is_mid"] = True
+    # Drop consumed sub-channel columns from base frame
+    drop_cols = ["Lat. 25Hz", "Lon. 25Hz", "Speed GPS 25Hz"] + _RPM_SUB_COLS
+    frame = frame.drop(columns=[c for c in drop_cols if c in frame.columns])
 
-    # Interleave and sort by time
-    expanded = pd.concat([frame, mid], ignore_index=True)
+    # If RPM sub-channels are present, drop the main 10Hz RPM (Excel does the same)
+    if has_rpm:
+        frame = frame.drop(columns=["RPM"], errors="ignore")
+
+    expanded = pd.concat([frame] + extra_frames, ignore_index=True)
     expanded = expanded.sort_values("Time", kind="mergesort").reset_index(drop=True)
+    return expanded
 
-    # Interpolate non-GPS columns that are NaN in midpoint rows
-    for col in expanded.columns:
-        if col in ("Time", "Partiel", "_is_mid", "Lat.", "Lon.", "Speed GPS",
-                   "Lat. 25Hz", "Lon. 25Hz", "Speed GPS 25Hz"):
-            continue
-        if expanded[col].dtype.kind in "fi":
-            expanded[col] = expanded[col].interpolate(method="linear")
 
-    # Drop consumed 25Hz columns and tag
-    for col in ("Lat. 25Hz", "Lon. 25Hz", "Speed GPS 25Hz", "_is_mid"):
-        if col in expanded.columns:
-            expanded.drop(columns=col, inplace=True)
+def _resample_100hz(frame: pd.DataFrame) -> pd.DataFrame:
+    """Resample a Time-indexed DataFrame to a uniform 100 Hz grid."""
+    frame = frame.set_index("Time")
+    # Merge duplicate timestamps (e.g. RPM sub-channel rows on same time as base row)
+    if frame.index.duplicated().any():
+        frame = frame.groupby(level=0).apply(lambda g: g.bfill().iloc[0])
+    t = frame.index
+    uniform_t = np.arange(t.min(), t.max(), 0.01)
+    frame = frame.reindex(frame.index.union(uniform_t)).interpolate(method="index").reindex(uniform_t)
+    frame.index.name = "Time"
+    return frame.reset_index()
 
-    return expanded, 1.0 / 0.05
+
+def _read_summary_lap_times(folder: Path) -> list[float] | None:
+    """Read real lap durations (seconds) from summary CSV if present."""
+    candidates = list(folder.glob("SN*.csv"))
+    if not candidates:
+        return None
+    try:
+        lines = candidates[0].read_text().splitlines()
+        durations = []
+        for line in lines[1:]:  # skip header line
+            parts = line.split(",")
+            if len(parts) >= 2 and parts[1].strip().isdigit():
+                durations.append(int(parts[1]) / 1000.0)
+        return durations if durations else None
+    except Exception:
+        return None
 
 
 def load_raw(folder: Path, normalize: bool = True) -> tuple[pd.DataFrame, dict]:
@@ -100,17 +131,32 @@ def load_raw(folder: Path, normalize: bool = True) -> tuple[pd.DataFrame, dict]:
     if not frames:
         raise FileNotFoundError(f"No LAP_*.csv files in {folder}")
 
-    frame = pd.concat(frames, ignore_index=True)
-    frame.insert(0, "Time", np.arange(len(frame)) * STEP)
+    # Build per-row timestamps using real lap durations from summary CSV
+    # when available, falling back to fixed STEP otherwise.
+    lap_times = _read_summary_lap_times(folder)
+    time_arrays = []
+    offset = 0.0
+    for i, df in enumerate(frames):
+        n = len(df)
+        if lap_times and i < len(lap_times):
+            step = lap_times[i] / n
+        else:
+            step = STEP
+        time_arrays.append(np.arange(n) * step + offset)
+        offset = time_arrays[-1][-1] + step
 
-    # Expand 25Hz GPS/Speed sub-channels to ~20Hz by interleaving midpoint samples.
-    # 25Hz value in row N was measured between rows N-1 and N (at time - 0.05s).
+    frame = pd.concat(frames, ignore_index=True)
+    frame.insert(0, "Time", np.concatenate(time_arrays))
+
+    # Expand 25Hz GPS/Speed and 50Hz RPM sub-channels into separate rows.
     # See experiments/alfano-log-zip-format/ALFANO7_FORMAT.md for protocol docs.
-    frame, effective_freq = _expand_25hz(frame)
+    frame = _expand_subchannels(frame)
 
     if normalize:
         frame = ChannelNormalizer(device_type="alfano").normalize_dataframe(frame)
-    frame = ensure_distance(frame, distance_keys=DISTANCE_KEYS, speed_keys=SPEED_KEYS, frequency=effective_freq)
+
+    frame = _resample_100hz(frame)
+    frame = ensure_distance(frame, distance_keys=DISTANCE_KEYS, speed_keys=SPEED_KEYS, frequency=100.0)
 
     device = detect_device(files)
     driver = ""
@@ -143,11 +189,6 @@ def load_csv(
     frequency: float = None,
     normalize: bool = True,
 ) -> tuple[pd.DataFrame, dict]:
-    # TODO: Fix European decimal format handling in Alfano7 Excel CSV export.
-    # RPM and Orientation use comma (4,562) while Speed GPS and others use point (28.1).
-    # Current code parses RPM as strings, resulting in NaN after to_numeric().
-    # Need to either: 1) Use decimal=',' in excel_frame() and post-process point-separated cols,
-    # or 2) Parse numeric columns individually with appropriate decimal separators.
     path_or_folder = Path(path_or_folder)
 
     if path_or_folder.is_file() and path_or_folder.suffix.lower() == ".csv":
@@ -165,13 +206,11 @@ def load_csv(
     frame = excel_frame(csv_path)
     frame = stitch_time(frame)
 
-    freq = frequency
-    if freq is None:
-        freq = infer_frequency(frame["Time"])
-
     if normalize:
         frame = ChannelNormalizer(device_type="alfano").normalize_dataframe(frame)
-    frame = ensure_distance(frame, distance_keys=DISTANCE_KEYS, speed_keys=SPEED_KEYS, frequency=freq)
+
+    frame = _resample_100hz(frame)
+    frame = ensure_distance(frame, distance_keys=DISTANCE_KEYS, speed_keys=SPEED_KEYS, frequency=100.0)
 
     driver = ""
     venue = ""

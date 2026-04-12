@@ -55,7 +55,14 @@ def excel_frame(csv_path: Path) -> pd.DataFrame:
     frame.columns = [clean_header(col) for col in frame.columns]
     frame = frame.dropna(axis=1, how="all").dropna(how="all").copy()
     for col in frame.columns:
-        frame[col] = pd.to_numeric(frame[col], errors="ignore")
+        series = frame[col]
+        if series.dtype == object:
+            # European thousand-separator comma (e.g. "8,198" → 8198)
+            cleaned = series.str.replace(",", "", regex=False)
+            converted = pd.to_numeric(cleaned, errors="coerce")
+            if converted.notna().any():
+                series = converted
+        frame[col] = pd.to_numeric(series, errors="coerce")
     return frame
 
 
