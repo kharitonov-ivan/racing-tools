@@ -178,16 +178,17 @@ def run_interactive_sync(video_path, crossings, fps=None, duration=None):
     return final_shift
 
 
-def run_manual_lap_marking(video_path, start_time: float = 0.0):
+def run_manual_lap_marking(video_path, start_time: float = 0.0, existing_boundaries: list[float] | None = None):
     # TODO: Add sector marking feature - use keys 1-5 to mark sector boundaries within each lap.
     # This would enable per-lap sector time analysis and comparison.
     """
     Runs an interactive OpenCV window to manually mark lap boundaries.
-    
+
     Args:
         video_path (Path): Path to video file.
         start_time (float): Initial time position to start the window at (default 0.0).
-        
+        existing_boundaries: Previously saved lap boundary times to pre-load for editing.
+
     Returns:
         list[float]: List of video timestamps for lap boundaries (start of Lap 1, start of Lap 2, etc.)
                      Returns None if cancelled.
@@ -207,8 +208,15 @@ def run_manual_lap_marking(video_path, start_time: float = 0.0):
     # State
     # List of marked timestamps (video time)
     # We keep them sorted
-    marked_boundaries = []
-    
+    if existing_boundaries:
+        marked_boundaries = list(existing_boundaries)
+        print(f"[LapMarking] Loaded {len(marked_boundaries)} existing boundaries")
+    else:
+        marked_boundaries = []
+
+    # Index of currently selected lap for navigation (-1 = none)
+    selected_lap_idx = -1
+
     # Start at specified time
     current_frame = int(start_time * fps)
     
@@ -244,16 +252,13 @@ def run_manual_lap_marking(video_path, start_time: float = 0.0):
         # Show last few boundaries
         sorted_boundaries = sorted(marked_boundaries)
         for i, t in enumerate(sorted_boundaries):
-            # Show Lap N (Interval between t_i and t_{i+1})
-            # Boundary i starts Lap i+1 (if we assume Lap 0 is before first mark)
-            # Or usually: First mark is Start/Finish line crossing starting Lap 1 (End of Out Lap)
-            # So:
-            # < Mark 0: Out Lap (Lap 0)
-            # Mark 0 - Mark 1: Lap 1
-            # Mark 1 - Mark 2: Lap 2
-            
             label = f"Start Lap {i+1}"
-            info_text.append(f"{label}: {t:.3f}s")
+            lap_time_str = ""
+            if i > 0:
+                lap_time = t - sorted_boundaries[i - 1]
+                lap_time_str = f" ({lap_time:.2f}s)"
+            marker = " >>" if i == selected_lap_idx else "   "
+            info_text.append(f"{marker} {label}: {t:.3f}s{lap_time_str}")
             
         # Predictive next info
         predict_available = len(sorted_boundaries) >= 3
@@ -268,6 +273,7 @@ def run_manual_lap_marking(video_path, start_time: float = 0.0):
         info_text.append("  PgUp/Dn: Seek 50fr")
         info_text.append("  z / x  : Seek -/+ 7s")
         info_text.append("  p      : Predictive next (3+ marks)")
+        info_text.append("  Tab    : Next lap  |  ` : Prev lap")
         info_text.append("  Space  : Mark/Unmark")
         info_text.append("  Enter  : Finish")
 
@@ -282,7 +288,9 @@ def run_manual_lap_marking(video_path, start_time: float = 0.0):
             color = (255, 255, 255)
             if "Video Time" in line:
                 color = (0, 255, 255)
-            
+            elif line.startswith(" >>"):
+                color = (0, 255, 0)
+
             cv2.putText(frame, line, (20, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
             y += 30
             
@@ -323,15 +331,31 @@ def run_manual_lap_marking(video_path, start_time: float = 0.0):
             if found_idx >= 0:
                 print(f"Removed mark at {marked_boundaries[found_idx]:.3f}s")
                 del marked_boundaries[found_idx]
+                selected_lap_idx = -1
             else:
                 marked_boundaries.append(video_time)
                 print(f"Added mark at {video_time:.3f}s")
+                selected_lap_idx = -1
                 
         elif key == ord('p'): # Predictive next
             if predict_available:
                 target = max(0.0, min(predict_target, duration))
                 current_frame = int(target * fps)
                 print(f"[Predict] Jumped to {target:.1f}s (last lap {last_lap:.1f}s)")
+
+        elif key == 9:  # Tab - next lap
+            if sorted_boundaries:
+                selected_lap_idx = (selected_lap_idx + 1) % len(sorted_boundaries)
+                target = sorted_boundaries[selected_lap_idx]
+                current_frame = int(target * fps)
+                print(f"[Nav] Lap {selected_lap_idx + 1} at {target:.3f}s")
+
+        elif key == ord('`'):  # Backtick - prev lap
+            if sorted_boundaries:
+                selected_lap_idx = (selected_lap_idx - 1) % len(sorted_boundaries)
+                target = sorted_boundaries[selected_lap_idx]
+                current_frame = int(target * fps)
+                print(f"[Nav] Lap {selected_lap_idx + 1} at {target:.3f}s")
 
         # Seek controls
         elif key == ord('z'): # Seek -7s

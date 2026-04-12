@@ -179,12 +179,10 @@ def main() -> int:
     crossings_sidecar = VideoSidecar.load(inp_path, "crossings")
     if crossings_sidecar.exists:
         print(f"[Crossings] Found saved video crossings: {len(crossings_sidecar.get('times', []))} laps")
-        if not args.no_interactive:
-            if input("Regenerate lap markings? [y/N]: ").strip().lower() == "y":
-                crossings_sidecar.exists = False
 
-    if not crossings_sidecar.exists and not args.no_interactive:
-        times = run_manual_lap_marking(args.inp, start_time=0.0)
+    if not args.no_interactive:
+        existing_times = crossings_sidecar.get("times", []) if crossings_sidecar.exists else []
+        times = run_manual_lap_marking(args.inp, start_time=0.0, existing_boundaries=existing_times or None)
         if times:
             crossings_sidecar.save({"times": times})
 
