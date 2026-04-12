@@ -41,6 +41,13 @@ def format_time(seconds: Optional[float]) -> str:
     return f"{m}:{s:06.3f}"
 
 
+def format_sector_time(seconds: Optional[float]) -> str:
+    """Format sector time as SS.mm (no minutes, 2 decimal places)."""
+    if seconds is None or not math.isfinite(seconds) or seconds <= 0:
+        return "-"
+    return f"{seconds:.2f}"
+
+
 def format_speed(speed: Optional[float]) -> str:
     """Format speed in km/h."""
     if speed is None or not math.isfinite(speed):
@@ -167,7 +174,7 @@ def draw_lap_table(
     fnt_small = get_font(10)
 
     ox, oy = origin
-    row_h = 22
+    row_h = 32
     header_h = 30
 
     col_widths = [50, 80] + [90] * n_sectors
@@ -176,6 +183,13 @@ def draw_lap_table(
     valid_laps = [s for s in lap_stats if s.get("time") and s["time"] > 20.0 and not s.get("label")]
     top3 = sorted([(s["id"], s["time"]) for s in valid_laps], key=lambda x: x[1])[:3]
     top3_ids = {lid: i + 1 for i, (lid, _) in enumerate(top3)}
+
+    best_sector_times: dict[int, float] = {}
+    for s in valid_laps:
+        stats = sector_stats_all.get(s["id"], {})
+        for sec_idx, (_, _, sec_time, _) in stats.items():
+            if sec_time > 0 and (sec_idx not in best_sector_times or sec_time < best_sector_times[sec_idx]):
+                best_sector_times[sec_idx] = sec_time
 
     y = oy
     x = ox
@@ -223,8 +237,12 @@ def draw_lap_table(
                 sector_stats = sector_stats_all.get(lap_id, {})
                 if sector_idx in sector_stats and not is_pit:
                     min_spd, max_spd, sec_time, _ = sector_stats[sector_idx]
-                    text = f"{format_speed(min_spd)}/{format_speed(max_spd)}"
-                    draw.text((x + w // 2, y + row_h // 2), text, font=fnt_small, fill=text_color, anchor="mm")
+                    time_text = format_sector_time(sec_time)
+                    spd_text = f"{format_speed(min_spd)}/{format_speed(max_spd)}"
+                    is_best = sec_time > 0 and abs(sec_time - best_sector_times.get(sector_idx, -1)) < 0.001
+                    time_color = "#00FF00" if is_best else text_color
+                    draw.text((x + w // 2, y + 4), time_text, font=fnt_row, fill=time_color, anchor="mt")
+                    draw.text((x + w // 2, y + row_h - 3), spd_text, font=fnt_small, fill="#888888", anchor="mb")
 
             x += w
 
@@ -255,7 +273,7 @@ def draw_statistics(
     header_h = 30
 
     col_widths = [60, 70] + [90] * n_sectors
-    col_headers = ["Stat", "Lap Time"] + [f"S{i + 1} Avg" for i in range(n_sectors)]
+    col_headers = ["Stat", "Lap Time"] + [f"S{i + 1}" for i in range(n_sectors)]
 
     valid_laps = [s for s in lap_stats if s.get("time") and s["time"] > 20.0 and not s.get("label")]
 
@@ -314,11 +332,11 @@ def draw_statistics(
                 draw.text((x + w - 5, y + row_h // 2), text, font=fnt_row, fill="#CCCCCC", anchor="rm")
             else:
                 sector_idx = col_idx - 2
-                speeds = sector_speeds.get(sector_idx, [])
-                if speeds:
+                times = sector_times.get(sector_idx, [])
+                if times:
                     try:
-                        val = stat_fn(speeds)
-                        text = f"{int(val)}"
+                        val = stat_fn(times)
+                        text = format_sector_time(val)
                     except Exception:
                         text = "-"
                 else:
