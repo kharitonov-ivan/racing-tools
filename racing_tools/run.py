@@ -123,6 +123,10 @@ def main() -> int:
         session.to_motec(output=motec_output, frequency=100.0)
         print(f"[MoTeC] Exported to {motec_output}")
 
+        gpx_output = Path(args.telemetry).with_suffix(".gpx")
+        session.to_gpx(gpx_output)
+        print(f"[GPX] Exported to {gpx_output}")
+
     telemetry_dir = Path(args.telemetry).parent if args.telemetry else Path.cwd()
     report_out = telemetry_dir / f"{telemetry_dir.stem}_report.png"
 
