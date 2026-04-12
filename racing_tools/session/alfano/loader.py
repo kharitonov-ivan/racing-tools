@@ -85,12 +85,17 @@ def _expand_subchannels(frame: pd.DataFrame) -> pd.DataFrame:
 def _resample_100hz(frame: pd.DataFrame) -> pd.DataFrame:
     """Resample a Time-indexed DataFrame to a uniform 100 Hz grid."""
     frame = frame.set_index("Time")
+    if len(frame) < 2:
+        return frame.reset_index()
     # Merge duplicate timestamps (e.g. RPM sub-channel rows on same time as base row)
     if frame.index.duplicated().any():
-        frame = frame.groupby(level=0).apply(lambda g: g.bfill().iloc[0])
+        frame = frame.groupby(level=0).first().combine_first(
+            frame.groupby(level=0).last()
+        )
     t = frame.index
-    uniform_t = np.arange(t.min(), t.max(), 0.01)
+    uniform_t = np.arange(t.min(), t.max() + 0.005, 0.01)
     frame = frame.reindex(frame.index.union(uniform_t)).interpolate(method="index").reindex(uniform_t)
+    frame = frame.ffill().bfill()
     frame.index.name = "Time"
     return frame.reset_index()
 

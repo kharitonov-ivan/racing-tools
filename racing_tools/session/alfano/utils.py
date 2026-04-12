@@ -57,11 +57,17 @@ def excel_frame(csv_path: Path) -> pd.DataFrame:
     for col in frame.columns:
         series = frame[col]
         if series.dtype == object:
-            # European thousand-separator comma (e.g. "8,198" → 8198)
-            cleaned = series.str.replace(",", "", regex=False)
-            converted = pd.to_numeric(cleaned, errors="coerce")
-            if converted.notna().any():
-                series = converted
+            # Alfano Excel CSV uses European formatting: semicolon field separator,
+            # comma as thousand separator (e.g. RPM "8,198" = 8198, "13,879" = 13879).
+            # Detect: thousand-separator pattern is digit,digit{3} (e.g. "8,198").
+            # Decimal comma would be digit,digit{1-2} (e.g. "12,5").
+            sample = series.dropna().head(20)
+            has_thousands = sample.str.match(r"^\d{1,3}(,\d{3})+$").any()
+            if has_thousands:
+                cleaned = series.str.replace(",", "", regex=False)
+                converted = pd.to_numeric(cleaned, errors="coerce")
+                if converted.notna().any():
+                    series = converted
         frame[col] = pd.to_numeric(series, errors="coerce")
     return frame
 
