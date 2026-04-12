@@ -165,12 +165,28 @@ def load_raw(path: Path, normalize: bool = True) -> tuple[pd.DataFrame, dict]:
             )
 
     table = table.ffill().bfill()
+
+    # Unwrap angular columns before interpolation to avoid 359->1 artifacts
+    angular_cols = [c for c in table.columns if c in ("GPS Heading",)]
+    for col in angular_cols:
+        table[col] = np.unwrap(np.radians(table[col]))
+
+    # Resample to uniform 100 Hz grid
+    t = table.index
+    uniform_t = np.arange(t.min(), t.max(), 0.01)
+    table = table.reindex(table.index.union(uniform_t)).interpolate(method="index").reindex(uniform_t)
+    table.index.name = "Time"
+
+    # Re-wrap angular columns
+    for col in angular_cols:
+        table[col] = np.degrees(table[col]) % 360.0
+
     table = table.reset_index()
 
     if normalize:
         table = ChannelNormalizer(device_type="aim").normalize_dataframe(table)
 
-    table = ensure_distance(table, distance_keys=DISTANCE_KEYS, speed_keys=SPEED_KEYS, frequency=20.0)
+    table = ensure_distance(table, distance_keys=DISTANCE_KEYS, speed_keys=SPEED_KEYS, frequency=100.0)
 
     return table, {
         "driver": driver,

@@ -120,7 +120,7 @@ def main() -> int:
         session.add_lap_numbers()
 
         motec_output = Path(args.telemetry).with_suffix(".ld")
-        session.to_motec(output=motec_output, frequency=50.0)
+        session.to_motec(output=motec_output, frequency=100.0)
         print(f"[MoTeC] Exported to {motec_output}")
 
     telemetry_dir = Path(args.telemetry).parent if args.telemetry else Path.cwd()
