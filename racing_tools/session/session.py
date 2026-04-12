@@ -673,6 +673,30 @@ class Session:
         ordered = priority + trailing
         return self.table.loc[:, ordered] if ordered and ordered != columns else self.table
 
+    def to_gpx(self, path: Path, *, name: str = "", description: str = "") -> Path:
+        from racing_tools.session.gpx.exporter import export
+
+        start_time = None
+        if self.event_date:
+            time_str = self.event_time or "00:00"
+            try:
+                from datetime import datetime, timezone
+
+                start_time = datetime.strptime(
+                    f"{self.event_date} {time_str}", "%Y-%m-%d %H:%M"
+                ).replace(tzinfo=timezone.utc)
+            except ValueError:
+                pass
+
+        return export(
+            self.table,
+            Path(path),
+            name=name or self.venue or "",
+            description=description,
+            creator=f"racing-tools ({self.device})" if self.device else "racing-tools",
+            start_time=start_time,
+        )
+
     def to_csv(self, path: Path) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
         data = self._ordered_table()
