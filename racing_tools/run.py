@@ -78,6 +78,7 @@ def main() -> int:
 
     p.add_argument("--intrinsics", help="path to camera intrinsics CSV")
     p.add_argument("--no-interactive", action="store_true", help="skip interactive prompts")
+    p.add_argument("--gpx", action="store_true", default=False, help="export session as GPX")
 
     p.add_argument(
         "--dynamic-overlay",
@@ -123,9 +124,10 @@ def main() -> int:
         session.to_motec(output=motec_output, frequency=100.0)
         print(f"[MoTeC] Exported to {motec_output}")
 
-        gpx_output = Path(args.telemetry).with_suffix(".gpx")
-        session.to_gpx(gpx_output)
-        print(f"[GPX] Exported to {gpx_output}")
+        if args.gpx:
+            gpx_output = Path(args.telemetry).with_suffix(".gpx")
+            session.to_gpx(gpx_output)
+            print(f"[GPX] Exported to {gpx_output}")
 
     telemetry_dir = Path(args.telemetry).parent if args.telemetry else Path.cwd()
     report_out = telemetry_dir / f"{telemetry_dir.stem}_report.png"
