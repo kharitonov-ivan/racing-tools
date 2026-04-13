@@ -272,6 +272,176 @@ class Session:
         self.crossings = crossings
         return crossings
 
+    def detect_sector_crossings(
+        self,
+        sf_margin_m: float = 1.0,
+    ) -> dict[str, list[float]]:
+        """Detect crossing times for all named sector lines (S1, S2, etc.).
+
+        Uses the same signed-distance zero-crossing approach as detect_crossings()
+        but for each sector line defined in track.sectors_utm (excluding SF).
+
+        Returns:
+            Dict mapping sector name to list of crossing times in seconds.
+        """
+        if self.track is None:
+            return {}
+
+        lat_col = self._pick_column(["GPS Latitude", "Latitude"])
+        lon_col = self._pick_column(["GPS Longitude", "Longitude"])
+        if not lat_col or not lon_col:
+            return {}
+
+        lats = pd.to_numeric(self.table[lat_col], errors="coerce").values
+        lons = pd.to_numeric(self.table[lon_col], errors="coerce").values
+        times = pd.to_numeric(self.table["Time"], errors="coerce").values
+
+        result: dict[str, list[float]] = {}
+
+        for name, pts_utm in self.track.sectors_utm.items():
+            if name == "SF":
+                continue
+            if len(pts_utm) < 2:
+                continue
+
+            # Convert UTM sector points to WGS84
+            transformer = self.track._get_transformer_to_wgs84()
+            xs = [p[0] for p in pts_utm]
+            ys = [p[1] for p in pts_utm]
+            sector_lons, sector_lats = transformer.transform(xs, ys)
+            p1 = (sector_lons[0], sector_lats[0])
+            p2 = (sector_lons[-1], sector_lats[-1])
+
+            dx = p2[0] - p1[0]
+            dy = p2[1] - p1[1]
+            line_len_m = ((dx * 111000) ** 2 + (dy * 111000) ** 2) ** 0.5
+
+            mid = np.array([(p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2])
+            max_along_m = line_len_m / 2 + sf_margin_m
+
+            along = np.array([dx, dy])
+            along_len = np.linalg.norm(along)
+            along_unit = along / along_len
+
+            norm = np.array([-dy, dx])
+            norm = norm / np.linalg.norm(norm)
+
+            # Signed distance from sector line
+            ddx = lons - p1[0]
+            ddy = lats - p1[1]
+            signed_dist = ddx * norm[0] + ddy * norm[1]
+
+            # Distance along sector direction from midpoint
+            dx_mid = lons - mid[0]
+            dy_mid = lats - mid[1]
+            along_dist_m = (dx_mid * along_unit[0] + dy_mid * along_unit[1]) * 111000
+
+            crossings: list[float] = []
+            expected_sign: int | None = None
+
+            for i in range(1, len(signed_dist)):
+                if times[i] <= 0.0:
+                    continue
+                if signed_dist[i - 1] * signed_dist[i] >= 0:
+                    continue
+
+                frac = abs(signed_dist[i - 1]) / (abs(signed_dist[i - 1]) + abs(signed_dist[i]))
+                along_at = along_dist_m[i - 1] + frac * (along_dist_m[i] - along_dist_m[i - 1])
+                if abs(along_at) > max_along_m:
+                    continue
+
+                sign = 1 if signed_dist[i] > signed_dist[i - 1] else -1
+                if expected_sign is None:
+                    expected_sign = sign
+                elif sign != expected_sign:
+                    continue
+
+                crossing_time = times[i - 1] + frac * (times[i] - times[i - 1])
+
+                if crossings and (crossing_time - crossings[-1]) < 5.0:
+                    continue
+
+                crossings.append(crossing_time)
+
+            result[name] = crossings
+            print(f"[Sectors] {name}: {len(crossings)} crossings")
+
+        self.sector_crossings = result
+        return result
+
+    def get_sector_splits(self) -> dict[int, dict[str, float]]:
+        """Calculate sector split times for each lap.
+
+        Sectors are defined by crossing times: SF→S1, S1→S2, S2→SF(next).
+        The order is determined by sector names sorted alphabetically (S1, S2, ...).
+
+        Returns:
+            Dict mapping lap_id to {sector_name: time_seconds}.
+            Sector names like "SF-S1", "S1-S2", "S2-SF".
+        """
+        if not hasattr(self, "sector_crossings") or not self.sector_crossings:
+            return {}
+        if not self.crossings:
+            return {}
+
+        # Build ordered list of sector names
+        sector_names = sorted(self.sector_crossings.keys())
+        if not sector_names:
+            return {}
+
+        # Build ordered boundary names: SF, S1, S2, ..., SF
+        boundary_order = ["SF"] + sector_names + ["SF"]
+        # Corresponding crossing times
+        all_crossing_times: dict[str, list[float]] = {
+            "SF": self.crossings,
+        }
+        all_crossing_times.update(self.sector_crossings)
+
+        splits: dict[int, dict[str, float]] = {}
+
+        for lap_idx in range(len(self.crossings) - 1):
+            lap_id = lap_idx + 1
+            lap_start = self.crossings[lap_idx]
+            lap_end = self.crossings[lap_idx + 1]
+
+            lap_splits: dict[str, float] = {}
+
+            for seg_i in range(len(boundary_order) - 1):
+                from_name = boundary_order[seg_i]
+                to_name = boundary_order[seg_i + 1]
+                split_name = f"{from_name}-{to_name}"
+
+                if seg_i == 0:
+                    t_start = lap_start
+                else:
+                    # Find crossing of from_name within this lap
+                    cx_list = all_crossing_times[from_name]
+                    t_start = None
+                    for cx in cx_list:
+                        if lap_start < cx < lap_end:
+                            t_start = cx
+                            break
+                    if t_start is None:
+                        continue
+
+                if seg_i == len(boundary_order) - 2:
+                    t_end = lap_end
+                else:
+                    cx_list = all_crossing_times[to_name]
+                    t_end = None
+                    for cx in cx_list:
+                        if (t_start or lap_start) < cx < lap_end:
+                            t_end = cx
+                            break
+                    if t_end is None:
+                        continue
+
+                lap_splits[split_name] = t_end - t_start
+
+            splits[lap_id] = lap_splits
+
+        return splits
+
     def compute_gear_ratio(self, tire_diameter_in: float = 11.0) -> None:
         """Compute overall gear ratio from RPM and Speed, add as 'GearRatio' column.
 

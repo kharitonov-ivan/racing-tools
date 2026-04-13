@@ -154,10 +154,19 @@ def emit_lap_stats_ass(ass: AssBuilder, session: "VideoSession") -> None:
     ass.add_style(f"Style: RowBlue,Arial,{s24},&H00FF8000,&H000000FF,&H00000000,&H60000000,1,0,0,0,100,100,0,0,1,1,1,7,10,10,10,1")  # 2nd (blue)
     ass.add_style(f"Style: RowGreen,Arial,{s24},&H0000FFFF,&H000000FF,&H00000000,&H60000000,1,0,0,0,100,100,0,0,1,1,1,7,10,10,10,1")  # 3rd (green)
 
+    # Get sector splits
+    sector_splits = session.get_sector_splits()
+    split_names: list[str] = []
+    for lap_splits in sector_splits.values():
+        split_names = list(lap_splits.keys())
+        break
+
     sample = lap_stats[0]
     columns: list[tuple[str, str, int]] = [("Lap", "id", 60), ("Video LT", "time", 120)]
     if any(s.get("gps_time") is not None for s in lap_stats):
         columns.append(("GPS LT", "gps_time", 120))
+    for name in split_names:
+        columns.append((name, f"_split_{name}", 100))
     for key, value in sample.items():
         if key in ("id", "time", "gps_time", "label"):
             continue
@@ -219,11 +228,21 @@ def emit_lap_stats_ass(ass: AssBuilder, session: "VideoSession") -> None:
 
         for col_idx, (_, key, _) in enumerate(scaled_columns):
             x_pos = base_x + col_positions[col_idx]
-            value = s.get(key)
+            if key.startswith("_split_"):
+                split_name = key[7:]  # strip "_split_" prefix
+                splits = sector_splits.get(lap_id, {})
+                value = splits.get(split_name)
+            else:
+                value = s.get(key)
             if key == "id":
                 text = label if label else (f"{value}*" if value == best_lap_id else str(value))
             elif key in ("time", "gps_time"):
                 text = format_duration(value, decimals=3) if value else "-"
+            elif key.startswith("_split_"):
+                if is_pit or value is None:
+                    text = ""
+                else:
+                    text = f"{value:.2f}"
             elif is_pit:
                 text = ""
             elif value is None:

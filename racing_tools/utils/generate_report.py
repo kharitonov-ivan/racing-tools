@@ -159,41 +159,42 @@ def draw_track_map(
 def draw_lap_table(
     draw: ImageDraw.ImageDraw,
     lap_stats: list[dict],
-    sector_stats_all: dict[int, dict[int, tuple[float, float, float, float]]],
+    sector_splits: dict[int, dict[str, float]],
     origin: tuple[int, int],
-    n_sectors: int,
+    split_names: list[str],
     best_lap_id: int,
 ) -> int:
-    """Draw lap table with sector times and speeds.
+    """Draw lap table with sector split times.
 
     Returns:
         Height used
     """
     fnt_header = get_font(14)
     fnt_row = get_font(12)
-    fnt_small = get_font(10)
 
     ox, oy = origin
-    row_h = 32
+    row_h = 22
     header_h = 30
 
-    col_widths = [50, 80] + [90] * n_sectors
-    col_headers = ["Lap", "Time"] + [f"S{i + 1}" for i in range(n_sectors)]
+    n_sectors = len(split_names)
+    col_widths = [50, 80] + [80] * n_sectors
+    col_headers = ["Lap", "Time"] + split_names
 
     valid_laps = [s for s in lap_stats if s.get("time") and s["time"] > 20.0 and not s.get("label")]
     top3 = sorted([(s["id"], s["time"]) for s in valid_laps], key=lambda x: x[1])[:3]
     top3_ids = {lid: i + 1 for i, (lid, _) in enumerate(top3)}
 
-    best_sector_times: dict[int, float] = {}
+    # Find best time per sector split
+    best_split_times: dict[str, float] = {}
     for s in valid_laps:
-        stats = sector_stats_all.get(s["id"], {})
-        for sec_idx, (_, _, sec_time, _) in stats.items():
-            if sec_time > 0 and (sec_idx not in best_sector_times or sec_time < best_sector_times[sec_idx]):
-                best_sector_times[sec_idx] = sec_time
+        splits = sector_splits.get(s["id"], {})
+        for name, t in splits.items():
+            if t > 0 and (name not in best_split_times or t < best_split_times[name]):
+                best_split_times[name] = t
 
     y = oy
     x = ox
-    for i, (header, w) in enumerate(zip(col_headers, col_widths)):
+    for header, w in zip(col_headers, col_widths):
         draw.rectangle([x, y, x + w - 1, y + header_h - 1], fill="#333333", outline="#555555")
         draw.text((x + w // 2, y + header_h // 2), header, font=fnt_header, fill="#FFFFFF", anchor="mm")
         x += w
@@ -233,16 +234,14 @@ def draw_lap_table(
                 text = format_time(s.get("time"))
                 draw.text((x + w - 5, y + row_h // 2), text, font=fnt_row, fill=text_color, anchor="rm")
             else:
-                sector_idx = col_idx - 2
-                sector_stats = sector_stats_all.get(lap_id, {})
-                if sector_idx in sector_stats and not is_pit:
-                    min_spd, max_spd, sec_time, _ = sector_stats[sector_idx]
+                split_name = split_names[col_idx - 2]
+                splits = sector_splits.get(lap_id, {})
+                if split_name in splits and not is_pit:
+                    sec_time = splits[split_name]
                     time_text = format_sector_time(sec_time)
-                    spd_text = f"{format_speed(min_spd)}/{format_speed(max_spd)}"
-                    is_best = sec_time > 0 and abs(sec_time - best_sector_times.get(sector_idx, -1)) < 0.001
+                    is_best = sec_time > 0 and abs(sec_time - best_split_times.get(split_name, -1)) < 0.001
                     time_color = "#00FF00" if is_best else text_color
-                    draw.text((x + w // 2, y + 4), time_text, font=fnt_row, fill=time_color, anchor="mt")
-                    draw.text((x + w // 2, y + row_h - 3), spd_text, font=fnt_small, fill="#888888", anchor="mb")
+                    draw.text((x + w // 2, y + row_h // 2), time_text, font=fnt_row, fill=time_color, anchor="mm")
 
             x += w
 
@@ -254,9 +253,9 @@ def draw_lap_table(
 def draw_statistics(
     draw: ImageDraw.ImageDraw,
     lap_stats: list[dict],
-    sector_stats_all: dict[int, dict[int, tuple[float, float, float, float]]],
+    sector_splits: dict[int, dict[str, float]],
     origin: tuple[int, int],
-    n_sectors: int,
+    split_names: list[str],
     session_table: Optional[pd.DataFrame] = None,
 ) -> int:
     """Draw statistics table (mean, median) for valid laps.
@@ -272,8 +271,9 @@ def draw_statistics(
     row_h = 24
     header_h = 30
 
-    col_widths = [60, 70] + [90] * n_sectors
-    col_headers = ["Stat", "Lap Time"] + [f"S{i + 1}" for i in range(n_sectors)]
+    n_sectors = len(split_names)
+    col_widths = [60, 70] + [80] * n_sectors
+    col_headers = ["Stat", "Lap Time"] + split_names
 
     valid_laps = [s for s in lap_stats if s.get("time") and s["time"] > 20.0 and not s.get("label")]
 
@@ -294,23 +294,19 @@ def draw_statistics(
         return y - oy + row_h
 
     lap_times = np.array([s["time"] for s in valid_laps])
-    sector_speeds: dict[int, list[float]] = {i: [] for i in range(n_sectors)}
-    sector_times: dict[int, list[float]] = {i: [] for i in range(n_sectors)}
+    sector_times: dict[str, list[float]] = {name: [] for name in split_names}
 
     for s in valid_laps:
         lap_id = s["id"]
-        stats = sector_stats_all.get(lap_id, {})
-        for idx in range(n_sectors):
-            if idx in stats:
-                min_spd, max_spd, sec_time, _ = stats[idx]
-                sector_speeds[idx].append((min_spd + max_spd) / 2)
-                sector_times[idx].append(sec_time)
+        splits = sector_splits.get(lap_id, {})
+        for name in split_names:
+            if name in splits:
+                sector_times[name].append(splits[name])
 
     stats_rows = [
         ("Mean", np.mean),
         ("Median", np.median),
         ("Std", np.std),
-        ("Var", np.var),
         ("Min", np.min),
         ("Max", np.max),
     ]
@@ -331,8 +327,8 @@ def draw_statistics(
                     text = "-"
                 draw.text((x + w - 5, y + row_h // 2), text, font=fnt_row, fill="#CCCCCC", anchor="rm")
             else:
-                sector_idx = col_idx - 2
-                times = sector_times.get(sector_idx, [])
+                name = split_names[col_idx - 2]
+                times = sector_times.get(name, [])
                 if times:
                     try:
                         val = stat_fn(times)
@@ -446,6 +442,112 @@ def calculate_acceleration_stats(session_table: Optional[pd.DataFrame]) -> dict[
     return stats
 
 
+def draw_segment_table(
+    draw: ImageDraw.ImageDraw,
+    lap_stats: list[dict],
+    segment_stats_all: dict[int, dict[int, tuple[float, float, float, float]]],
+    segments: list[dict],
+    origin: tuple[int, int],
+    best_lap_id: int,
+) -> int:
+    """Draw segment (auto-generated straights/turns) table with times and speeds.
+
+    Returns:
+        Height used
+    """
+    fnt_header = get_font(12)
+    fnt_row = get_font(10)
+
+    n_segments = len(segments)
+    if n_segments == 0:
+        return 0
+
+    ox, oy = origin
+    row_h = 18
+    header_h = 30
+
+    # Column per segment, narrow to fit many
+    seg_col_w = 55
+    col_widths = [40, 70] + [seg_col_w] * n_segments
+
+    # Build header labels: segment type abbreviation
+    seg_headers = []
+    for idx, seg in enumerate(segments):
+        seg_type = seg.get("type", "?")
+        label = f"{'T' if seg_type == 'turn' else 'S'}{idx + 1}"
+        seg_headers.append(label)
+    col_headers = ["Lap", "Time"] + seg_headers
+
+    valid_laps = [s for s in lap_stats if s.get("time") and s["time"] > 20.0 and not s.get("label")]
+    top3 = sorted([(s["id"], s["time"]) for s in valid_laps], key=lambda x: x[1])[:3]
+    top3_ids = {lid: i + 1 for i, (lid, _) in enumerate(top3)}
+
+    # Best segment times
+    best_seg_times: dict[int, float] = {}
+    for s in valid_laps:
+        stats = segment_stats_all.get(s["id"], {})
+        for seg_idx, (_, _, seg_time, _) in stats.items():
+            if seg_time > 0 and (seg_idx not in best_seg_times or seg_time < best_seg_times[seg_idx]):
+                best_seg_times[seg_idx] = seg_time
+
+    y = oy
+    draw.text((ox, y), "Track Segments", font=get_font(14), fill="#FFFFFF")
+    y += 20
+
+    x = ox
+    for header, w in zip(col_headers, col_widths):
+        draw.rectangle([x, y, x + w - 1, y + header_h - 1], fill="#333333", outline="#555555")
+        draw.text((x + w // 2, y + header_h // 2), header, font=fnt_header, fill="#FFFFFF", anchor="mm")
+        x += w
+    y += header_h
+
+    sorted_stats = sorted(lap_stats, key=lambda s: s["id"])
+
+    for s in sorted_stats:
+        lap_id = s["id"]
+        label = s.get("label")
+        is_pit = label in ("POUT", "PIN")
+        x = ox
+
+        if is_pit:
+            bg_color = "#444444"
+            text_color = "#888888"
+        elif lap_id in top3_ids:
+            rank = top3_ids[lap_id]
+            bg_color = ["#4a0000", "#00304a", "#004a00"][rank - 1]
+            text_color = "#FFFFFF"
+        elif lap_id == best_lap_id:
+            bg_color = "#4a4a00"
+            text_color = "#FFFFFF"
+        else:
+            bg_color = "#222222"
+            text_color = "#CCCCCC"
+
+        for col_idx, w in enumerate(col_widths):
+            draw.rectangle([x, y, x + w - 1, y + row_h - 1], fill=bg_color, outline="#333333")
+
+            if col_idx == 0:
+                text = label if label else str(lap_id)
+                draw.text((x + 3, y + row_h // 2), text, font=fnt_row, fill=text_color, anchor="lm")
+            elif col_idx == 1:
+                text = format_time(s.get("time"))
+                draw.text((x + w - 3, y + row_h // 2), text, font=fnt_row, fill=text_color, anchor="rm")
+            else:
+                seg_idx = col_idx - 2
+                seg_stats = segment_stats_all.get(lap_id, {})
+                if seg_idx in seg_stats and not is_pit:
+                    min_spd, max_spd, seg_time, _ = seg_stats[seg_idx]
+                    time_text = format_sector_time(seg_time)
+                    is_best = seg_time > 0 and abs(seg_time - best_seg_times.get(seg_idx, -1)) < 0.001
+                    color = "#00FF00" if is_best else text_color
+                    draw.text((x + w // 2, y + row_h // 2), time_text, font=fnt_row, fill=color, anchor="mm")
+
+            x += w
+        y += row_h
+
+    return y - oy
+
+
 def generate_report(
     telemetry_path: Path,
     track_dir: Path,
@@ -459,7 +561,7 @@ def generate_report(
     print(f"Loading track from {track_dir}...")
     track = Track.load(track_dir)
 
-    session.track = track.geometry
+    session.track = track
     print("Detecting crossings...")
     session.detect_crossings()
     session.add_lap_numbers()
@@ -473,21 +575,36 @@ def generate_report(
 
     print(f"Found {len(lap_stats)} laps, best lap: {best_lap_id}")
 
-    sectors = track.segments or []
-    n_sectors = len(sectors)
-    print(f"Track has {n_sectors} sectors")
+    # Detect sector crossings and compute split times
+    session.detect_sector_crossings()
+    sector_splits = session.get_sector_splits()
 
-    sector_colors = ["#FF6B6B", "#4ECDC4", "#45B7D1", "#96CEB4", "#FFEAA7", "#DDA0DD", "#98D8C8", "#F7DC6F"]
+    # Get split names from first valid lap
+    split_names: list[str] = []
+    for lap_splits in sector_splits.values():
+        split_names = list(lap_splits.keys())
+        break
+    n_sectors = len(split_names)
+    print(f"Track has {n_sectors} sector splits: {split_names}")
 
-    sector_stats_all: dict[int, dict[int, tuple[float, float, float, float]]] = {}
+    # Track segments for map visualization and segment stats
+    segments = track.segments or []
+    n_segments = len(segments)
+    segment_colors = ["#FF6B6B", "#4ECDC4", "#45B7D1", "#96CEB4", "#FFEAA7", "#DDA0DD", "#98D8C8", "#F7DC6F"]
+
+    # Calculate segment stats
+    segment_stats_all: dict[int, dict[int, tuple[float, float, float, float]]] = {}
     for s in lap_stats:
         lap_id = s["id"]
-        if "Distance" in session.table.columns:
-            sector_stats_all[lap_id] = calculate_sector_stats(session.table, lap_id, sectors)
+        if "Distance" in session.table.columns and segments:
+            segment_stats_all[lap_id] = calculate_sector_stats(session.table, lap_id, segments)
 
-    table_width = 50 + 80 + 90 * n_sectors
+    sector_table_width = 50 + 80 + 80 * n_sectors
+    segment_table_width = 40 + 70 + 55 * n_segments
+    table_width = max(sector_table_width, segment_table_width)
     img_w = map_size[0] + 50 + table_width + 50
-    img_h = max(map_size[1] + 100, 500 + len(lap_stats) * 22 + 300)
+    n_rows = len(lap_stats)
+    img_h = max(map_size[1] + 100, 80 + n_rows * 22 + 30 + 200 + 30 + 20 + 30 + n_rows * 18 + 100)
 
     img = Image.new("RGB", (img_w, img_h), "#111111")
     draw = ImageDraw.Draw(img)
@@ -501,22 +618,26 @@ def generate_report(
     info_text = f"Track: {venue}  |  Date: {date_str}  |  Driver: {driver}"
     draw.text((25, 45), info_text, font=get_font(14), fill="#888888")
 
-    draw_track_map(draw, track, sectors, sector_colors, origin=(25, 80), size=map_size)
+    draw_track_map(draw, track, segments, segment_colors, origin=(25, 80), size=map_size)
 
     table_origin = (map_size[0] + 75, 80)
-    table_height = draw_lap_table(draw, lap_stats, sector_stats_all, table_origin, n_sectors, best_lap_id)
+    table_height = draw_lap_table(draw, lap_stats, sector_splits, table_origin, split_names, best_lap_id)
 
     stats_origin = (map_size[0] + 75, 80 + table_height + 30)
-    draw_statistics(draw, lap_stats, sector_stats_all, stats_origin, n_sectors, session.table)
+    stats_height = draw_statistics(draw, lap_stats, sector_splits, stats_origin, split_names, session.table)
+
+    if segments:
+        seg_table_origin = (map_size[0] + 75, 80 + table_height + 30 + stats_height + 20)
+        draw_segment_table(draw, lap_stats, segment_stats_all, segments, seg_table_origin, best_lap_id)
 
     legend_y = 80 + map_size[1] + 20
     fnt_legend = get_font(12)
     draw.text((25, legend_y), "Sector Colors:", font=fnt_legend, fill="#AAAAAA")
     legend_x = 130
-    for idx in range(min(n_sectors, len(sector_colors))):
-        color = sector_colors[idx]
+    for idx in range(min(len(segments), len(segment_colors))):
+        color = segment_colors[idx]
         draw.rectangle([legend_x, legend_y, legend_x + 20, legend_y + 15], fill=color, outline="#000000")
-        draw.text((legend_x + 25, legend_y + 7), f"S{idx + 1}", font=fnt_legend, fill="#CCCCCC", anchor="lm")
+        draw.text((legend_x + 25, legend_y + 7), f"Seg{idx + 1}", font=fnt_legend, fill="#CCCCCC", anchor="lm")
         legend_x += 60
 
     print(f"Saving report to {output_path}...")

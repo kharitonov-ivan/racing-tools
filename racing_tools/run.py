@@ -109,6 +109,7 @@ def main() -> int:
         if track:
             session.track = track.geometry
             session.detect_crossings()
+            session.detect_sector_crossings()
 
         if not session.crossings and "Lap" in session.table.columns:
             laps = pd.to_numeric(session.table["Lap"], errors="coerce").ffill().fillna(1)
@@ -241,6 +242,16 @@ def main() -> int:
 
     if session and sync_mapping is not None:
         video_session.crossings_gps = crossings_telem
+
+    # Transfer sector crossings from telemetry session, converting to video time
+    if session and hasattr(session, "sector_crossings") and session.sector_crossings:
+        if sync_mapping is not None:
+            video_session.sector_crossings = {
+                name: [float(sync_mapping.telemetry_to_video(t)) for t in times_list]
+                for name, times_list in session.sector_crossings.items()
+            }
+        else:
+            video_session.sector_crossings = dict(session.sector_crossings)
 
     ass = AssBuilder(video_info.width, video_info.height)
     emit_lap_stats_ass(ass, video_session)
