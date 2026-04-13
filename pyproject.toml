@@ -40,6 +40,9 @@ dependencies = [
     "opencv-python>=4.11.0.86",
     "cantools>=41.2.1",
 ]
+[project.scripts]
+mark-crossings = "racing_tools.mark_crossings:main"
+
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
