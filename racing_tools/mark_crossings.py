@@ -44,7 +44,7 @@ def main() -> int:
     p = argparse.ArgumentParser(description="Pre-mark video lap crossings for batch processing")
     p.add_argument("folders", nargs="*", default=[str(PROJECT_ROOT / "data" / "new")], help="Session folders or parent dirs (default: data/new)")
     p.add_argument("--n", type=int, default=None, help="Process N newest sessions")
-    p.add_argument("--force", action="store_true", help="Re-mark sessions that already have crossings")
+    p.add_argument("--skip-existing", action="store_true", help="Skip sessions that already have crossings")
     p.add_argument("--dry-run", action="store_true", help="Show sessions and their sidecar status")
     args = p.parse_args()
 
@@ -70,7 +70,7 @@ def main() -> int:
     skipped = 0
     for folder, video in sessions:
         sidecar = VideoSidecar.load(video, "crossings")
-        if sidecar.exists and not args.force:
+        if sidecar.exists and args.skip_existing:
             n = len(sidecar.get("times", []))
             print(f"[SKIP] {folder.name}: already has {n} crossings")
             skipped += 1
@@ -78,7 +78,7 @@ def main() -> int:
             to_mark.append((folder, video, sidecar))
 
     if not to_mark:
-        print(f"All {skipped} sessions already have crossings (use --force to re-mark)")
+        print(f"All {skipped} sessions already have crossings")
         return 0
 
     marked = 0
@@ -87,7 +87,11 @@ def main() -> int:
         print(f"  Video: {video.name}")
 
         existing = sidecar.get("times", []) if sidecar.exists else None
-        times = run_manual_lap_marking(str(video), start_time=0.0, existing_boundaries=existing or None)
+        try:
+            times = run_manual_lap_marking(str(video), start_time=0.0, existing_boundaries=existing or None)
+        except KeyboardInterrupt:
+            print("\nAborted.")
+            break
 
         if times:
             VideoSidecar(video, "crossings").save({"times": times})
