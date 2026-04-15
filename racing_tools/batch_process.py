@@ -228,8 +228,8 @@ def main() -> int:
     print(f"Done: {success} succeeded, {len(failures)} failed")
 
     if failures:
-        log_path = Path(args.folders[0]) / "batch_errors.log"
-        failed_path = Path(args.folders[0]) / "batch_failed.txt"
+        log_path = Path.cwd() / "batch_errors.log"
+        failed_path = Path.cwd() / "batch_failed.txt"
         with open(log_path, "w") as log_f, open(failed_path, "w") as list_f:
             for folder, error in failures:
                 list_f.write(f"{folder}\n")
