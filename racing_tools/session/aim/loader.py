@@ -207,9 +207,11 @@ def load_csv(path_or_folder: Path, frequency: float = 20.0, normalize: bool = Tr
         raise FileNotFoundError(f"AIM CSV not found at {csv_path}")
 
     df, meta = frame(csv_path)
-    df = ensure_distance(df, distance_keys=DISTANCE_KEYS, speed_keys=SPEED_KEYS, frequency=frequency)
+    if "Time" in df.columns:
+        df["Time"] = pd.to_numeric(df["Time"], errors="coerce")
     if normalize:
         df = ChannelNormalizer().normalize_dataframe(df)
+    df = ensure_distance(df, distance_keys=DISTANCE_KEYS, speed_keys=SPEED_KEYS, frequency=frequency)
 
     driver = ""
     venue = ""
