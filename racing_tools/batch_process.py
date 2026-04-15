@@ -99,7 +99,7 @@ def has_export(folder: Path) -> bool:
     return bool(list(folder.glob("*.ld")))
 
 
-def process_folder(folder: Path, args: argparse.Namespace) -> bool:
+def process_folder(folder: Path, args: argparse.Namespace) -> tuple[bool, str | None]:
     folder = Path(folder)
     result = find_telemetry(folder)
     video = find_video(folder)
@@ -114,11 +114,11 @@ def process_folder(folder: Path, args: argparse.Namespace) -> bool:
             print(f"[INFO] No telemetry found — interactive lap marking mode")
         else:
             print(f"[SKIP] No telemetry found in {folder}")
-            return False
+            return False, "No telemetry found"
 
     if args.no_overwrite and has_export(folder):
         print(f"[SKIP] Already exported (remove --no-overwrite to re-process)")
-        return True
+        return True, None
 
     if result:
         fmt, telemetry = result
@@ -129,7 +129,7 @@ def process_folder(folder: Path, args: argparse.Namespace) -> bool:
             print(f"[WARN] No video found, exporting telemetry only")
         else:
             print(f"[SKIP] No video found (required for --ass/--render)")
-            return False
+            return False, "No video found"
 
     use_video = video and want_video
     if use_video:
@@ -157,8 +157,12 @@ def process_folder(folder: Path, args: argparse.Namespace) -> bool:
 
     print(f"[RUN] {' '.join(cmd)}")
 
-    result = subprocess.run(cmd, cwd=PROJECT_ROOT)
-    return result.returncode == 0
+    result = subprocess.run(cmd, cwd=PROJECT_ROOT, capture_output=True, text=True)
+    if result.stdout:
+        print(result.stdout, end="")
+    if result.returncode != 0:
+        return False, result.stderr
+    return True, None
 
 
 def main() -> int:
@@ -211,19 +215,34 @@ def main() -> int:
         return 0
 
     success = 0
-    failed = 0
+    failures: list[tuple[Path, str]] = []
 
     for folder in all_dirs:
-        ok = process_folder(folder, args)
+        ok, error = process_folder(folder, args)
         if ok:
             success += 1
         else:
-            failed += 1
+            failures.append((folder, error or ""))
 
     print(f"\n{'=' * 60}")
-    print(f"Done: {success} succeeded, {failed} failed")
+    print(f"Done: {success} succeeded, {len(failures)} failed")
 
-    return 0 if failed == 0 else 1
+    if failures:
+        log_path = Path.cwd() / "batch_errors.log"
+        failed_path = Path.cwd() / "batch_failed.txt"
+        with open(log_path, "w") as log_f, open(failed_path, "w") as list_f:
+            for folder, error in failures:
+                list_f.write(f"{folder}\n")
+                log_f.write(f"{'=' * 60}\n")
+                log_f.write(f"FAILED: {folder.name}\n")
+                log_f.write(f"{'=' * 60}\n")
+                log_f.write(error)
+                log_f.write("\n")
+        print(f"Error log: {log_path}")
+        print(f"Failed folders: {failed_path}")
+        print(f"Re-run failed: uv run python -m racing_tools.batch_process $(cat {failed_path} | tr '\\n' ' ') {' '.join(sys.argv[1:])}")
+
+    return 0 if not failures else 1
 
 
 if __name__ == "__main__":
