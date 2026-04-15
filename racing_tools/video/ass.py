@@ -392,7 +392,7 @@ def emit_gauge_ass(ass: AssBuilder, session: "VideoSession") -> None:
     max_rpm = DEFAULT_MAX_RPM
     if rpm_col:
         m = session_table[rpm_col].max()
-        if not np.isnan(m):
+        if not np.isnan(m) and m > 0:
             max_rpm = int(np.ceil(m / 1000) * 1000)
 
     total_frames = len(session_table)
