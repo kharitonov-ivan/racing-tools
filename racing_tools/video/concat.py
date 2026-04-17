@@ -404,8 +404,35 @@ def check_date_correction(prev: VideoData, curr: VideoData) -> bool:
     return False
 
 
+def parse_gopro_filename(path: Path) -> Optional[tuple[int, int]]:
+    """Parse GoPro chaptered filename into (chapter, file_id).
+
+    GoPro Hero5+ naming: GX{chapter:02d}{file_id:04d}.MP4
+    e.g. GX028890.MP4 -> (2, 8890)
+    """
+    match = re.match(r"^G[XH](\d{2})(\d{4})\.", path.name, re.IGNORECASE)
+    if not match:
+        return None
+    return int(match.group(1)), int(match.group(2))
+
+
+def is_gopro_continuous(prev: VideoData, curr: VideoData) -> bool:
+    """Check if two videos are consecutive GoPro chapters of the same recording."""
+    prev_parsed = parse_gopro_filename(prev["file"])
+    curr_parsed = parse_gopro_filename(curr["file"])
+    if not prev_parsed or not curr_parsed:
+        return False
+    prev_chapter, prev_id = prev_parsed
+    curr_chapter, curr_id = curr_parsed
+    return prev_id == curr_id and curr_chapter == prev_chapter + 1
+
+
 def is_continuous(prev: VideoData, curr: VideoData) -> bool:
     """Check if two videos are continuous using multiple strategies."""
+    # GoPro chapters are authoritative — no timestamps needed
+    if is_gopro_continuous(prev, curr):
+        return True
+
     # Try each continuity check in order
     if check_theoretical_continuity(prev, curr):
         return True
