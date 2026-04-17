@@ -81,6 +81,19 @@ def build_stabilizer(
     return Pipeline(v, pipe.audio)
 
 
+def build_padder(pipe: Pipeline, pad_end: float = 0.0, pad_start: float = 0.0) -> Pipeline:
+    """Pad video with black frames and audio with silence at start/end."""
+    v = pipe.video
+    a = pipe.audio
+    if pad_start > 0:
+        v = v.filter("tpad", start_duration=pad_start, color="black")
+        a = a.filter("adelay", f"{int(pad_start * 1000)}|{int(pad_start * 1000)}")
+    if pad_end > 0:
+        v = v.filter("tpad", stop_duration=pad_end, color="black")
+        a = a.filter("apad", pad_dur=pad_end)
+    return Pipeline(v, a)
+
+
 def build_ov(pipe: Pipeline, overlay_stream: ffmpeg.Stream | None = None) -> Pipeline:
     v = pipe.video
     if overlay_stream:

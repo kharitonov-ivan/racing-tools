@@ -10,7 +10,10 @@ import ffmpeg
 import pandas as pd
 
 from racing_tools.camera.model import CameraModel
-from racing_tools.session.crossing_validation import validate_crossings
+from racing_tools.session.crossing_validation import (
+    find_crossing_alignment,
+    validate_crossings,
+)
 from racing_tools.session.distance import ensure_distance
 from racing_tools.session.session import (
     PiecewiseSync,
@@ -27,6 +30,7 @@ from racing_tools.video.ass import AssBuilder, emit_gauge_ass, emit_lap_stats_as
 from racing_tools.video.pipeline import (
     Pipeline,
     build_opener,
+    build_padder,
     build_per_lap_track_maps,
     build_scaler,
     build_stabilizer,
@@ -190,8 +194,39 @@ def main() -> int:
     crossings_video: list[float] = crossings_sidecar.get("times", [])
     crossings_telem: list[float] = session.crossings if session else []
     sync_mapping: PiecewiseSync | None = None
+    video_truncated = False
+    crossing_offset = 0
 
     if session and crossings_video and crossings_telem:
+        if len(crossings_video) < len(crossings_telem):
+            n_video = len(crossings_video)
+            n_telem = len(crossings_telem)
+            is_truncated = crossings_sidecar.get("truncated", False)
+            if not is_truncated:
+                print(
+                    f"[Warning] Video has {n_video} crossings but telemetry has {n_telem}. "
+                    f"Video may be incomplete (e.g. camera battery died, lost chapter)."
+                )
+                if args.no_interactive:
+                    print("[Error] Cannot resolve crossing mismatch in --no-interactive mode. "
+                          "Run once without --no-interactive to mark video as truncated.")
+                else:
+                    answer = input("Is the video incomplete/corrupt? [y/N]: ").strip().lower()
+                    is_truncated = answer == "y"
+            if is_truncated:
+                crossing_offset = find_crossing_alignment(crossings_video, crossings_telem)
+                crossings_telem = crossings_telem[crossing_offset : crossing_offset + n_video]
+                video_truncated = True
+                if not crossings_sidecar.get("truncated"):
+                    crossings_sidecar.save({**crossings_sidecar.data, "truncated": True})
+                if crossing_offset == 0:
+                    print(f"[Truncated] Video covers laps 1–{n_video - 1} (end missing)")
+                elif crossing_offset + n_video == n_telem:
+                    print(f"[Truncated] Video covers laps {crossing_offset + 1}–{n_telem - 1} (start missing)")
+                else:
+                    print(f"[Truncated] Video covers laps {crossing_offset + 1}–{crossing_offset + n_video - 1} (start and end missing)")
+            # else: proceed normally, validation will assert mismatch
+
         validate_crossings(crossings_video, crossings_telem)
         anchors = list(zip(crossings_video, crossings_telem))
         sync_mapping = PiecewiseSync(anchors=anchors)
@@ -206,13 +241,24 @@ def main() -> int:
 
     trim_start = 0.0
     trim_end = video_info.duration
+    pad_start = 0.0
+    pad_end = 0.0
 
     if session and sync_mapping is not None:
         telem_times = pd.to_numeric(session.table["Time"], errors="coerce")
         telem_start = float(telem_times.iloc[0])
         telem_end = float(telem_times.iloc[-1])
-        trim_start = max(0.0, float(sync_mapping.telemetry_to_video(telem_start)))
-        trim_end = min(video_info.duration, float(sync_mapping.telemetry_to_video(telem_end)))
+        telem_start_in_video = float(sync_mapping.telemetry_to_video(telem_start))
+        telem_end_in_video = float(sync_mapping.telemetry_to_video(telem_end))
+        trim_start = max(0.0, telem_start_in_video)
+        trim_end = min(video_info.duration, telem_end_in_video)
+        if video_truncated:
+            pad_start = max(0.0, trim_start - telem_start_in_video)
+            pad_end = max(0.0, telem_end_in_video - trim_end)
+            if pad_start > 0:
+                print(f"[Pad] Prepending {pad_start:.1f}s of black frames (start missing)")
+            if pad_end > 0:
+                print(f"[Pad] Appending {pad_end:.1f}s of black frames (end missing)")
         telem_duration = telem_end - telem_start
         video_duration = trim_end - trim_start
         print(f"[Trim] From telemetry range: {trim_start:.1f}s — {trim_end:.1f}s "
@@ -228,20 +274,43 @@ def main() -> int:
     video_session = VideoSession.from_session(session, inp_path)
     video_session._video_info = video_info
 
+    # Capture full telemetry lap stats before resampling replaces the table
+    if video_truncated and session:
+        video_session.crossings_gps = list(session.crossings)
+        video_session._full_lap_stats = video_session.get_lap_stats()
+        video_session._full_best_lap = video_session.best_lap
+        # Fix "Video LT": only for laps covered by video crossings
+        video_durations: dict[int, float] = {}
+        for i in range(1, len(crossings_video)):
+            video_durations[crossing_offset + i] = crossings_video[i] - crossings_video[i - 1]
+        for stat in video_session._full_lap_stats:
+            stat["time"] = video_durations.get(stat["id"])
+
     if session and sync_mapping is not None:
+        resample_start = trim_start - pad_start
+        resample_end = trim_end + pad_end
         video_session.table = video_session.resample_to_video(
             fps=video_info.fps,
-            trim_start=0.0,
-            duration=video_info.duration,
+            trim_start=resample_start,
+            duration=resample_end - resample_start,
             sync=sync_mapping,
         )
 
-    if crossings_video:
+    if video_truncated and session and sync_mapping is not None:
+        # Use ALL original telemetry crossings converted to video time
+        all_telem_crossings = session.crossings
+        all_crossings_in_video = [
+            float(sync_mapping.telemetry_to_video(t)) for t in all_telem_crossings
+        ]
+        video_session.crossings = all_crossings_in_video
+        video_session.crossings_gps = list(all_telem_crossings)
+        print(f"[Crossings] All telemetry crossings in video time: {len(all_crossings_in_video)} "
+              f"(first={all_crossings_in_video[0]:.1f}s, last={all_crossings_in_video[-1]:.1f}s)")
+    elif crossings_video:
         video_session.crossings = list(crossings_video)
         print(f"[Crossings] Display crossings (source time): {video_session.crossings[:3]}...")
-
-    if session and sync_mapping is not None:
-        video_session.crossings_gps = crossings_telem
+        if session and sync_mapping is not None:
+            video_session.crossings_gps = crossings_telem
 
     # Transfer sector crossings from telemetry session, converting to video time
     if session and hasattr(session, "sector_crossings") and session.sector_crossings:
@@ -252,6 +321,16 @@ def main() -> int:
             }
         else:
             video_session.sector_crossings = dict(session.sector_crossings)
+
+    # Save crossings in original video time for best lap export
+    crossings_for_export = list(video_session.crossings)
+
+    # Shift video time and crossings to output time for ASS generation
+    ass_time_shift = pad_start - trim_start
+    if "VideoTime" in video_session.table.columns:
+        video_session.table["VideoTime"] = video_session.table["VideoTime"] + ass_time_shift
+    if video_session.crossings:
+        video_session.crossings = [c + ass_time_shift for c in video_session.crossings]
 
     ass = AssBuilder(video_info.width, video_info.height)
     emit_lap_stats_ass(ass, video_session)
@@ -266,10 +345,12 @@ def main() -> int:
         return 0
 
     trimmed_ass_path = Path(args.out).with_name(f"{Path(args.out).stem}_trimmed.ass")
-    ass.write_with_offset(trimmed_ass_path, time_offset=-trim_start)
+    ass.write_with_offset(trimmed_ass_path, time_offset=0.0)
 
     pipeline = build_opener(inp_path, hwaccel=hwaccel)
     pipeline = build_trimer(pipeline, trim_start, trim_end)
+    if pad_start > 0 or pad_end > 0:
+        pipeline = build_padder(pipeline, pad_end=pad_end, pad_start=pad_start)
     if getattr(args, "resolution", None):
         pipeline = build_scaler(pipeline, video_info.width, video_info.height)
     pipeline = Pipeline(pipeline.video.filter("subtitles", filename=str(trimmed_ass_path)), pipeline.audio)
@@ -337,6 +418,7 @@ def main() -> int:
         signal.signal(signal.SIGINT, original_handler)
 
     if args.export_best_lap:
+        video_session.crossings = crossings_for_export
         export_best_lap(
             output_video=args.out,
             video_session=video_session,

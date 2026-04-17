@@ -121,6 +121,7 @@ class AssBuilder:
 
 def fmt_ass_time(t: float) -> str:
     """Format seconds as ASS timestamp H:MM:SS.cc with millisecond precision."""
+    t = max(0.0, t)
     h = int(t / 3600)
     m = int((t % 3600) / 60)
     s = int(t % 60)
@@ -131,9 +132,9 @@ def fmt_ass_time(t: float) -> str:
 
 def emit_lap_stats_ass(ass: AssBuilder, session: "VideoSession") -> None:
     """Emit lap list styles and events into AssBuilder."""
-    lap_stats = session.get_lap_stats()
+    lap_stats = getattr(session, "_full_lap_stats", None) or session.get_lap_stats()
     crossings = session.crossings
-    best_lap = session.best_lap
+    best_lap = getattr(session, "_full_best_lap", None) or session.best_lap
     total_duration = session.info.duration
     width = session.info.width
 
@@ -254,7 +255,9 @@ def emit_lap_stats_ass(ass: AssBuilder, session: "VideoSession") -> None:
                 ass.add_event(f"{common}{{\\pos({x_pos},{y_pos})}}{text}")
 
     # Dynamic pointer >
-    times = [0.0] + list(crossings) + [total_duration]
+    boundary_start = min(0.0, crossings[0] - 1.0) if crossings else 0.0
+    boundary_end = max(total_duration, crossings[-1] + 300.0) if crossings else total_duration
+    times = [boundary_start] + list(crossings) + [boundary_end]
     for i in range(len(times) - 1):
         range_start, range_end = times[i], times[i + 1]
         if range_end <= range_start:
@@ -396,6 +399,8 @@ def emit_gauge_ass(ass: AssBuilder, session: "VideoSession") -> None:
 
     total_frames = len(session_table)
     display_crossings: list[float] = getattr(session, "crossings", []) or []
+    video_times = session_table["VideoTime"].values if "VideoTime" in session_table.columns else None
+    telem_times = session_table["TelemetryTime"].values if "TelemetryTime" in session_table.columns else None
 
     def fmt_lap_time(t: float) -> str:
         m = int(t / 60)
@@ -404,8 +409,12 @@ def emit_gauge_ass(ass: AssBuilder, session: "VideoSession") -> None:
 
     interval = max(1, round(fps / GAUGE_FPS))
     for i in range(0, total_frames, interval):
-        t_start = i / fps
-        t_end = min((i + interval) / fps, total_frames / fps)
+        if video_times is not None:
+            t_start = video_times[i]
+            t_end = video_times[min(i + interval, total_frames - 1)]
+        else:
+            t_start = i / fps
+            t_end = min((i + interval) / fps, total_frames / fps)
         s_str = fmt_ass_time(t_start)
         e_str = fmt_ass_time(t_end)
 
@@ -437,7 +446,10 @@ def emit_gauge_ass(ass: AssBuilder, session: "VideoSession") -> None:
                 else:
                     break
             lap_elapsed = t_start - last_crossing
-        timer_text = f"Lap {fmt_lap_time(lap_elapsed)}  |  Frame {i}"
+        timer_text = f"Lap {fmt_lap_time(lap_elapsed)}  |  Frame {i}  |  V:{int(t_start // 60)}:{t_start % 60:05.2f}"
+        if telem_times is not None:
+            tt = telem_times[i]
+            timer_text += f"  T:{int(tt // 60)}:{tt % 60:05.2f}"
         if lats is not None:
             timer_text += f"  |  {lats[i]:.6f}, {lons[i]:.6f}"
         ass.add_event(f"Dialogue: 1,{s_str},{e_str},LapTimer,,0,0,0,,{timer_text}")

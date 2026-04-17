@@ -1,5 +1,7 @@
 """Validation for video and GPS crossing alignment."""
 
+from __future__ import annotations
+
 import numpy as np
 
 from racing_tools.track.constants import MIN_VALID_LAP_TIME
@@ -113,3 +115,55 @@ def _assert_lap_time_deltas(
             f"Lap {i + 1} time delta too large: "
             f"video={v_lap:.3f}s, telem={t_lap:.3f}s, delta={delta:.3f}s > {max_delta}s"
         )
+
+
+def find_crossing_alignment(
+    crossings_video: list[float],
+    crossings_telem: list[float],
+    max_lap_delta: float = 0.3,
+) -> int:
+    """Find which telemetry crossings correspond to video crossings.
+
+    Uses sliding window over lap times to find the best alignment offset.
+
+    Returns:
+        Offset into telemetry crossings (0 = video covers the start,
+        positive = video is missing that many crossings at the beginning).
+
+    Raises:
+        ValueError: If no alignment with acceptable lap time deltas is found.
+    """
+    n_video = len(crossings_video)
+    n_telem = len(crossings_telem)
+
+    if n_video < 2 or n_telem < 2 or n_video > n_telem:
+        raise ValueError(
+            f"Cannot align: video={n_video} crossings, telemetry={n_telem} crossings"
+        )
+
+    video_laps = list(np.diff(crossings_video))
+    telem_laps = list(np.diff(crossings_telem))
+    n_video_laps = len(video_laps)
+
+    best_offset = 0
+    best_error = float("inf")
+
+    for offset in range(n_telem - n_video + 1):
+        error = sum(
+            abs(video_laps[i] - telem_laps[offset + i])
+            for i in range(n_video_laps)
+        )
+        if error < best_error:
+            best_error = error
+            best_offset = offset
+
+    # Verify the best alignment has acceptable deltas
+    for i in range(n_video_laps):
+        delta = abs(video_laps[i] - telem_laps[best_offset + i])
+        if delta > max_lap_delta:
+            raise ValueError(
+                f"Best alignment (offset={best_offset}) has lap {i + 1} delta "
+                f"{delta:.3f}s > {max_lap_delta}s — cannot reliably align"
+            )
+
+    return best_offset
