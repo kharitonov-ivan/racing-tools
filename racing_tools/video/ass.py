@@ -141,18 +141,18 @@ def emit_lap_stats_ass(ass: AssBuilder, session: "VideoSession") -> None:
         return
 
     scale_h = session.info.height / 1080.0
+    s18 = max(10, int(18 * scale_h))
     s20 = max(12, int(20 * scale_h))
-    s24 = max(14, int(24 * scale_h))
 
-    # Styles
-    ass.add_style(f"Style: Header,{ASS_FONT},{s20},&H00AAAAAA,&H000000FF,&H00000000,&H60000000,1,0,0,0,100,100,0,0,1,1,1,7,10,10,10,1")
-    ass.add_style(f"Style: Row,{ASS_FONT},{s24},&H00FFFFFF,&H000000FF,&H00000000,&H60000000,1,0,0,0,100,100,0,0,1,1,1,7,10,10,10,1")
-    ass.add_style(f"Style: RowGold,{ASS_FONT},{s24},&H0000D7FF,&H000000FF,&H00000000,&H60000000,1,0,0,0,100,100,0,0,1,1,1,7,10,10,10,1")
-    ass.add_style(f"Style: RowPit,{ASS_FONT},{s24},&H00887766,&H000000FF,&H00000000,&H60000000,0,0,0,0,100,100,0,0,1,1,1,7,10,10,10,1")
+    # Styles – ScaleX=75 for condensed (narrow) look
+    ass.add_style(f"Style: Header,{ASS_FONT},{s18},&H00AAAAAA,&H000000FF,&H00000000,&H60000000,1,0,0,0,75,100,0,0,1,1,1,7,10,10,10,1")
+    ass.add_style(f"Style: Row,{ASS_FONT},{s20},&H00FFFFFF,&H000000FF,&H00000000,&H60000000,1,0,0,0,75,100,0,0,1,1,1,7,10,10,10,1")
+    ass.add_style(f"Style: RowGold,{ASS_FONT},{s20},&H0000D7FF,&H000000FF,&H00000000,&H60000000,1,0,0,0,75,100,0,0,1,1,1,7,10,10,10,1")
+    ass.add_style(f"Style: RowPit,{ASS_FONT},{s20},&H00887766,&H000000FF,&H00000000,&H60000000,0,0,0,0,75,100,0,0,1,1,1,7,10,10,10,1")
     # Top-3 lap styles (ASS uses BGR colors)
-    ass.add_style(f"Style: RowRed,{ASS_FONT},{s24},&H000000FF,&H000000FF,&H00000000,&H60000000,1,0,0,0,100,100,0,0,1,1,1,7,10,10,10,1")  # Best (red)
-    ass.add_style(f"Style: RowBlue,{ASS_FONT},{s24},&H00FF8000,&H000000FF,&H00000000,&H60000000,1,0,0,0,100,100,0,0,1,1,1,7,10,10,10,1")  # 2nd (blue)
-    ass.add_style(f"Style: RowGreen,{ASS_FONT},{s24},&H0000FFFF,&H000000FF,&H00000000,&H60000000,1,0,0,0,100,100,0,0,1,1,1,7,10,10,10,1")  # 3rd (green)
+    ass.add_style(f"Style: RowRed,{ASS_FONT},{s20},&H000000FF,&H000000FF,&H00000000,&H60000000,1,0,0,0,75,100,0,0,1,1,1,7,10,10,10,1")  # Best (red)
+    ass.add_style(f"Style: RowBlue,{ASS_FONT},{s20},&H00FF8000,&H000000FF,&H00000000,&H60000000,1,0,0,0,75,100,0,0,1,1,1,7,10,10,10,1")  # 2nd (blue)
+    ass.add_style(f"Style: RowGreen,{ASS_FONT},{s20},&H0000FFFF,&H000000FF,&H00000000,&H60000000,1,0,0,0,75,100,0,0,1,1,1,7,10,10,10,1")  # 3rd (green)
 
     # Get sector splits
     sector_splits = session.get_sector_splits()
@@ -162,28 +162,27 @@ def emit_lap_stats_ass(ass: AssBuilder, session: "VideoSession") -> None:
         break
 
     sample = lap_stats[0]
-    columns: list[tuple[str, str, int]] = [("Lap", "id", 60), ("Video LT", "time", 120)]
+    columns: list[tuple[str, str, int]] = [("Lap", "id", 45), ("Video LT", "time", 90)]
     if any(s.get("gps_time") is not None for s in lap_stats):
-        columns.append(("GPS LT", "gps_time", 120))
+        columns.append(("GPS LT", "gps_time", 90))
     for name in split_names:
-        columns.append((name, f"_split_{name}", 100))
+        columns.append((name, f"_split_{name}", 75))
     for key, value in sample.items():
         if key in ("id", "time", "gps_time", "label"):
             continue
         if value is not None:
-            columns.append((key.replace("_", " ").title(), key, 100))
+            columns.append((key.replace("_", " ").title(), key, 75))
 
-    margin_right = int(50 * scale_h)
-    col_gap = int(20 * scale_h)
+    margin_right = int(20 * scale_h)
+    col_gap = int(8 * scale_h)
 
     # Scale column widths
     scaled_columns = [(name, key, int(w * scale_h)) for name, key, w in columns]
 
     total_width = sum(c[2] for c in scaled_columns) + col_gap * (len(scaled_columns) - 1)
     base_x = width - total_width - margin_right
-    start_y = int(50 * scale_h)
-    # TODO: Reduce row height (currently 40 * scale_h) to fit more laps on screen
-    row_h = int(40 * scale_h)
+    start_y = int(15 * scale_h)
+    row_h = int(30 * scale_h)
 
     col_positions: list[int] = []
     x = 0
@@ -205,7 +204,7 @@ def emit_lap_stats_ass(ass: AssBuilder, session: "VideoSession") -> None:
         x_pos = base_x + col_positions[i]
         ass.add_event(f"Dialogue: 0,0:00:00.00,99:59:59.99,Header,,0,0,0,,{{\\pos({x_pos},{start_y})}}{header}")
 
-    data_start_y = start_y + int(40 * scale_h)
+    data_start_y = start_y + int(28 * scale_h)
 
     # Data rows (static)
     for row_idx, s in enumerate(sorted_stats):
