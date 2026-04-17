@@ -18,6 +18,8 @@ from racing_tools.session.predictive import PredictiveLapModel
 from racing_tools.track.constants import DEFAULT_MAX_RPM, MAX_DELTA_FOR_DISPLAY, MIN_VALID_LAP_TIME
 from racing_tools.video.overlay import format_duration
 
+ASS_FONT = "DejaVu Sans Mono"
+
 
 class AssBuilder:
     """Accumulates ASS styles and events, writes a single unified .ass file."""
@@ -142,17 +144,15 @@ def emit_lap_stats_ass(ass: AssBuilder, session: "VideoSession") -> None:
     s20 = max(12, int(20 * scale_h))
     s24 = max(14, int(24 * scale_h))
 
-    # TODO: Use a narrow/condensed font (e.g., "Arial Narrow", "Roboto Condensed", "Impact Condensed")
-    # to save horizontal space and fit more content. Test readability on video output.
     # Styles
-    ass.add_style(f"Style: Header,Arial,{s20},&H00AAAAAA,&H000000FF,&H00000000,&H60000000,1,0,0,0,100,100,0,0,1,1,1,7,10,10,10,1")
-    ass.add_style(f"Style: Row,Arial,{s24},&H00FFFFFF,&H000000FF,&H00000000,&H60000000,1,0,0,0,100,100,0,0,1,1,1,7,10,10,10,1")
-    ass.add_style(f"Style: RowGold,Arial,{s24},&H0000D7FF,&H000000FF,&H00000000,&H60000000,1,0,0,0,100,100,0,0,1,1,1,7,10,10,10,1")
-    ass.add_style(f"Style: RowPit,Arial,{s24},&H00887766,&H000000FF,&H00000000,&H60000000,0,0,0,0,100,100,0,0,1,1,1,7,10,10,10,1")
+    ass.add_style(f"Style: Header,{ASS_FONT},{s20},&H00AAAAAA,&H000000FF,&H00000000,&H60000000,1,0,0,0,100,100,0,0,1,1,1,7,10,10,10,1")
+    ass.add_style(f"Style: Row,{ASS_FONT},{s24},&H00FFFFFF,&H000000FF,&H00000000,&H60000000,1,0,0,0,100,100,0,0,1,1,1,7,10,10,10,1")
+    ass.add_style(f"Style: RowGold,{ASS_FONT},{s24},&H0000D7FF,&H000000FF,&H00000000,&H60000000,1,0,0,0,100,100,0,0,1,1,1,7,10,10,10,1")
+    ass.add_style(f"Style: RowPit,{ASS_FONT},{s24},&H00887766,&H000000FF,&H00000000,&H60000000,0,0,0,0,100,100,0,0,1,1,1,7,10,10,10,1")
     # Top-3 lap styles (ASS uses BGR colors)
-    ass.add_style(f"Style: RowRed,Arial,{s24},&H000000FF,&H000000FF,&H00000000,&H60000000,1,0,0,0,100,100,0,0,1,1,1,7,10,10,10,1")  # Best (red)
-    ass.add_style(f"Style: RowBlue,Arial,{s24},&H00FF8000,&H000000FF,&H00000000,&H60000000,1,0,0,0,100,100,0,0,1,1,1,7,10,10,10,1")  # 2nd (blue)
-    ass.add_style(f"Style: RowGreen,Arial,{s24},&H0000FFFF,&H000000FF,&H00000000,&H60000000,1,0,0,0,100,100,0,0,1,1,1,7,10,10,10,1")  # 3rd (green)
+    ass.add_style(f"Style: RowRed,{ASS_FONT},{s24},&H000000FF,&H000000FF,&H00000000,&H60000000,1,0,0,0,100,100,0,0,1,1,1,7,10,10,10,1")  # Best (red)
+    ass.add_style(f"Style: RowBlue,{ASS_FONT},{s24},&H00FF8000,&H000000FF,&H00000000,&H60000000,1,0,0,0,100,100,0,0,1,1,1,7,10,10,10,1")  # 2nd (blue)
+    ass.add_style(f"Style: RowGreen,{ASS_FONT},{s24},&H0000FFFF,&H000000FF,&H00000000,&H60000000,1,0,0,0,100,100,0,0,1,1,1,7,10,10,10,1")  # 3rd (green)
 
     # Get sector splits
     sector_splits = session.get_sector_splits()
@@ -296,23 +296,23 @@ def emit_gauge_ass(ass: AssBuilder, session: "VideoSession") -> None:
     s48 = max(24, int(48 * scale_h))
     s60 = max(30, int(60 * scale_h))
 
-    ass.add_style(f"Style: Gauge,Arial,{s48},&H00FFFFFF,&H000000FF,&H00000000,&H60000000,1,0,0,0,100,100,0,0,3,0,0,2,10,10,50,1")
-    ass.add_style(f"Style: LapTimer,Arial,{s36},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,0,0,1,10,10,100,1")
+    ass.add_style(f"Style: Gauge,{ASS_FONT},{s48},&H00FFFFFF,&H000000FF,&H00000000,&H60000000,1,0,0,0,100,100,0,0,3,0,0,2,10,10,50,1")
+    ass.add_style(f"Style: LapTimer,{ASS_FONT},{s36},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,0,0,1,10,10,100,1")
 
     # Alfano-style delta styles (ASS uses BGR colors) - larger fonts
-    ass.add_style(f"Style: DeltaLine,Arial,{s48},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,0,0,8,10,10,10,1")
-    ass.add_style(f"Style: DeltaTop1,Arial,{s60},&H000000FF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,0,0,8,10,10,10,1")  # Red (best)
-    ass.add_style(f"Style: DeltaTop2,Arial,{s60},&H00FF8000,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,0,0,8,10,10,10,1")  # Blue (2nd)
-    ass.add_style(f"Style: DeltaTop3,Arial,{s60},&H0000FFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,0,0,8,10,10,10,1")  # Green (3rd)
+    ass.add_style(f"Style: DeltaLine,{ASS_FONT},{s48},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,0,0,8,10,10,10,1")
+    ass.add_style(f"Style: DeltaTop1,{ASS_FONT},{s60},&H000000FF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,0,0,8,10,10,10,1")  # Red (best)
+    ass.add_style(f"Style: DeltaTop2,{ASS_FONT},{s60},&H00FF8000,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,0,0,8,10,10,10,1")  # Blue (2nd)
+    ass.add_style(f"Style: DeltaTop3,{ASS_FONT},{s60},&H0000FFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,0,0,8,10,10,10,1")  # Green (3rd)
     ass.add_style(
-        f"Style: DeltaGray,Arial,{s40},&H00888888,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,0,0,8,10,10,10,1"
+        f"Style: DeltaGray,{ASS_FONT},{s40},&H00888888,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,0,0,8,10,10,10,1"
     )  # Gray (other laps)
     ass.add_style(
-        f"Style: DeltaCurrent,Arial,{s60},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,0,0,8,10,10,10,1"
+        f"Style: DeltaCurrent,{ASS_FONT},{s60},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,0,0,8,10,10,10,1"
     )  # White (current)
-    ass.add_style(f"Style: DeltaLabel,Arial,{s36},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,0,0,8,10,10,10,1")
+    ass.add_style(f"Style: DeltaLabel,{ASS_FONT},{s36},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,0,0,8,10,10,10,1")
     ass.add_style(
-        f"Style: DeltaLapNum,Arial,{s24},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,0,0,8,10,10,10,1"
+        f"Style: DeltaLapNum,{ASS_FONT},{s24},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,0,0,8,10,10,10,1"
     )  # Smaller font for lap numbers
 
     # Build predictive models for ALL laps (Alfano-style)
