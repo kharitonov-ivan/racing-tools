@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import os
 import random
 import re
 import shutil
 import subprocess
 import sys
 from collections import Counter
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from io import BytesIO
 from pathlib import Path
@@ -549,60 +551,6 @@ def export_group(group: List[VideoData], output_folder: Path) -> None:
         list_file.unlink()
 
 
-def main():
-    check_system_dependencies()
-
-    parser = argparse.ArgumentParser(description="Concatenate racing videos.")
-    parser.add_argument("input_folder", type=Path)
-    parser.add_argument("--output", "-o", type=Path)
-    parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--debug", action="store_true")
-    args = parser.parse_args()
-
-    if not args.input_folder.exists():
-        console.print("[red]Input folder not found[/red]")
-        sys.exit(1)
-
-    out_folder = args.output or args.input_folder
-    if args.debug:
-        (out_folder / "debug").mkdir(parents=True, exist_ok=True)
-
-    files = get_video_files(args.input_folder)
-    if not files:
-        console.print("[yellow]No videos found[/yellow]")
-        return
-
-    video_data = []
-    with Progress(SpinnerColumn(), TextColumn("{task.description}"), transient=True) as progress:
-        task = progress.add_task("Processing...", total=len(files))
-        for f in files:
-            progress.update(task, description=f"Analyzing {f.name}")
-            video_data.append(analyze_video(f, out_folder / "debug" if args.debug else None))
-            progress.advance(task)
-
-    groups = group_videos(video_data)
-
-    unlabeled = [v for v in video_data if not v.get("start_time")]
-    if unlabeled:
-        console.print(f"\n[yellow]Found {len(unlabeled)} videos without timestamps, trying optical flow ordering...[/yellow]")
-        flow_groups = order_videos_by_optical_flow(unlabeled)
-        for fg in flow_groups:
-            if fg:
-                groups.append(fg)
-                console.print(f"[yellow]  Flow group: {len(fg)} videos[/yellow]")
-
-    console.print(f"\nFound {len(groups)} groups:")
-    for i, g in enumerate(groups):
-        start = g[0]["start_time"]
-        s_str = start.strftime("%Y-%m-%d %H:%M:%S") if start else "?"
-        console.print(f"  Group {i + 1}: {len(g)} files, Start: {s_str}")
-
-    if not args.dry_run:
-        out_folder.mkdir(parents=True, exist_ok=True)
-        for g in groups:
-            export_group(g, out_folder)
-
-
 def compute_flow_magnitude(frame1: np.ndarray, frame2: np.ndarray) -> float:
     """Compute mean optical flow magnitude between two frames.
 
@@ -835,6 +783,7 @@ def main():
     parser.add_argument("--output", "-o", type=Path)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--debug", action="store_true")
+    parser.add_argument("--workers", "-w", type=int, default=max(1, (os.cpu_count() or 2) - 1))
     args = parser.parse_args()
 
     if not args.input_folder.exists():
@@ -842,6 +791,7 @@ def main():
         sys.exit(1)
 
     out_folder = args.output or args.input_folder
+    debug_folder = out_folder / "debug" if args.debug else None
     if args.debug:
         (out_folder / "debug").mkdir(parents=True, exist_ok=True)
 
@@ -850,13 +800,19 @@ def main():
         console.print("[yellow]No videos found[/yellow]")
         return
 
-    video_data = []
+    console.print(f"Analyzing {len(files)} videos with {args.workers} workers")
+    results: list[Optional[VideoData]] = [None] * len(files)
     with Progress(SpinnerColumn(), TextColumn("{task.description}"), transient=True) as progress:
         task = progress.add_task("Processing...", total=len(files))
-        for f in files:
-            progress.update(task, description=f"Analyzing {f.name}")
-            video_data.append(analyze_video(f, out_folder / "debug" if args.debug else None))
-            progress.advance(task)
+        with ProcessPoolExecutor(max_workers=args.workers) as executor:
+            futures = {executor.submit(analyze_video, f, debug_folder): i for i, f in enumerate(files)}
+            for future in as_completed(futures):
+                idx = futures[future]
+                results[idx] = future.result()
+                progress.update(task, description=f"Analyzed {files[idx].name}")
+                progress.advance(task)
+
+    video_data = results
 
     groups = group_videos(video_data)
 
