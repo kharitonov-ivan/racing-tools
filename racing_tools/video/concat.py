@@ -307,6 +307,24 @@ def get_video_files(folder: Path) -> List[Path]:
     return sorted([f for f in folder.iterdir() if f.suffix in exts])
 
 
+def get_creation_time(file_path: Path) -> Optional[datetime]:
+    """Read creation_time from container metadata (GoPro et al.)."""
+    try:
+        data = ffmpeg.probe(str(file_path), show_entries="format_tags=creation_time")
+    except ffmpeg.Error:
+        return None
+
+    ct = data.get("format", {}).get("tags", {}).get("creation_time")
+    if not ct:
+        return None
+
+    try:
+        # Strip trailing Z and any fractional seconds beyond microseconds
+        return datetime.fromisoformat(ct.replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError:
+        return None
+
+
 def analyze_video(file_path: Path, debug_folder: Optional[Path]) -> VideoData:
     """Analyze video file to extract metadata and timestamp samples."""
     try:
@@ -315,10 +333,13 @@ def analyze_video(file_path: Path, debug_folder: Optional[Path]) -> VideoData:
     except (FileNotFoundError, KeyError, AttributeError):
         duration, fps, nb_frames = 0.0, 0.0, 0
 
-    # Sample timestamps
-    samples = sample_timestamps(file_path, duration, fps, num_samples=50, debug_folder=debug_folder)
-
-    start_time = estimate_start_time(samples, fps)
+    # GoPro chapters (GX*/GH*) carry reliable creation_time in metadata and
+    # have no burned-in timestamp overlay — skip OCR sampling entirely.
+    if parse_gopro_filename(file_path):
+        start_time = get_creation_time(file_path)
+    else:
+        samples = sample_timestamps(file_path, duration, fps, num_samples=50, debug_folder=debug_folder)
+        start_time = estimate_start_time(samples, fps)
 
     end_time = None
     if start_time:
