@@ -21,11 +21,17 @@ from pathlib import Path
 import numpy as np
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi", ".MP4", ".MOV", ".MKV", ".AVI"}
-GAP_TOLERANCE_FACTOR = 1.5  # dt > median * this counts as a gap
+# Only flag gaps larger than this — small drifts from rounding/B-frames don't
+# break sync (sync_ui uses real PTS now). The broken-concat artifact is ~0.5s.
+MIN_GAP_SECONDS = 0.1
 
 
 def _scan_video(path: Path) -> tuple[int, list[tuple[float, float]]] | None:
-    """Return (n_frames, [(pts_at_gap, dt), ...]) or None on probe failure."""
+    """Return (n_frames, [(pts_at_gap, dt), ...]) or None on probe failure.
+
+    Sorts PTS first to be robust to B-frame reorder (ffprobe returns packets
+    in DTS storage order, which differs from display/PTS order with B-frames).
+    """
     try:
         result = subprocess.run(
             [
@@ -50,11 +56,9 @@ def _scan_video(path: Path) -> tuple[int, list[tuple[float, float]]] | None:
     if len(pts) < 2:
         return None
 
-    arr = np.array(pts, dtype=np.float64)
+    arr = np.sort(np.array(pts, dtype=np.float64))
     diffs = np.diff(arr)
-    median_dt = float(np.median(diffs))
-    threshold = max(median_dt * GAP_TOLERANCE_FACTOR, median_dt + 0.005)
-    gap_idx = np.where(diffs > threshold)[0]
+    gap_idx = np.where(diffs > MIN_GAP_SECONDS)[0]
     gaps = [(float(arr[i]), float(diffs[i])) for i in gap_idx]
     return len(arr), gaps
 
