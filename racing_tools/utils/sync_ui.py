@@ -1,5 +1,69 @@
+import subprocess
+from pathlib import Path
+
 import cv2
 import numpy as np
+
+
+def _extract_video_pts(video_path) -> np.ndarray | None:
+    """Read per-frame PTS from a video file using ffprobe.
+
+    Returns an array of length N where pts[i] is the presentation timestamp
+    (seconds) of frame i in display order. Falls back to None on failure;
+    callers should then use frame_index / fps as before.
+
+    Why: cv2.CAP_PROP_POS_MSEC is unreliable after CAP_PROP_POS_FRAMES seek
+    (returns wrong values for files with non-uniform PTS — e.g. concatenated
+    GoPro chapters that have a 0.5s gap baked in at the seam).
+    """
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe", "-v", "error", "-select_streams", "v:0",
+                "-show_entries", "packet=pts_time", "-of", "csv=p=0",
+                str(video_path),
+            ],
+            capture_output=True, text=True, check=True, timeout=120,
+        )
+    except (subprocess.SubprocessError, FileNotFoundError) as e:
+        print(f"[Sync] ffprobe PTS extraction failed: {e}; falling back to frame/fps")
+        return None
+
+    pts = []
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            pts.append(float(line))
+        except ValueError:
+            continue
+
+    if not pts:
+        return None
+
+    pts_arr = np.array(pts, dtype=np.float64)
+    # Shift so first PTS = 0 (matches cv2 frame 0)
+    pts_arr -= pts_arr[0]
+    # Defensive sort (packets are usually already monotonic)
+    if not np.all(np.diff(pts_arr) >= 0):
+        pts_arr = np.sort(pts_arr)
+    return pts_arr
+
+
+def _frame_to_time(frame_idx: int, pts: np.ndarray | None, fps: float) -> float:
+    """Convert frame index to playback time (seconds), preferring real PTS."""
+    if pts is not None and 0 <= frame_idx < len(pts):
+        return float(pts[frame_idx])
+    return frame_idx / fps
+
+
+def _time_to_frame(t: float, pts: np.ndarray | None, fps: float, total_frames: int) -> int:
+    """Convert playback time (seconds) to nearest frame index."""
+    if pts is not None and len(pts) > 0:
+        return int(np.clip(np.searchsorted(pts, t), 0, len(pts) - 1))
+    return int(np.clip(round(t * fps), 0, total_frames - 1))
+
 
 def run_interactive_sync(video_path, crossings, fps=None, duration=None):
     """
@@ -24,23 +88,24 @@ def run_interactive_sync(video_path, crossings, fps=None, duration=None):
     if duration is None:
         frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         duration = frame_count / fps
-        
+
     total_frames = int(duration * fps)
-    
+    pts = _extract_video_pts(video_path)
+
     if not crossings:
         print("Error: No crossings provided for sync.")
         cap.release()
         return None
-    
+
     # State
     current_lap_idx = 0 # Index in crossings list (0 = Lap 1)
-    
+
     # Dictionary to store marked sync points: {lap_idx: video_time}
     marked_points = {}
-    
+
     # Initial seek to first crossing (assuming 0 shift)
     initial_time = max(0.0, min(crossings[0], duration))
-    current_frame = int(initial_time * fps)
+    current_frame = _time_to_frame(initial_time, pts, fps, total_frames)
     
     window_name = "Interactive Sync - Tab: Next Lap | Space: Mark | Enter: Finish"
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
@@ -61,8 +126,8 @@ def run_interactive_sync(video_path, crossings, fps=None, duration=None):
                 break
         else:
             last_valid_frame = frame.copy()
-            
-        video_time = current_frame / fps
+
+        video_time = _frame_to_time(current_frame, pts, fps)
         telemetry_time = crossings[current_lap_idx]
         
         # Calculate current potential shift
@@ -150,7 +215,7 @@ def run_interactive_sync(video_path, crossings, fps=None, duration=None):
                 est_shift = sum(shifts) / len(shifts)
             
             target_video_time = max(0.0, crossings[current_lap_idx] - est_shift)
-            current_frame = int(target_video_time * fps)
+            current_frame = _time_to_frame(target_video_time, pts, fps, total_frames)
             
         elif key == 32: # Space
             # Mark/Unmark
@@ -201,10 +266,13 @@ def run_manual_lap_marking(video_path, start_time: float = 0.0, existing_boundar
     fps = cap.get(cv2.CAP_PROP_FPS)
     frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     duration = frame_count / fps
-        
+
     total_frames = int(duration * fps)
     frames_7s = int(7 * fps)
-    
+    pts = _extract_video_pts(video_path)
+    if pts is not None:
+        print(f"[LapMarking] Loaded PTS for {len(pts)} frames (PTS-aware time)")
+
     # State
     # List of marked timestamps (video time)
     # We keep them sorted
@@ -218,7 +286,7 @@ def run_manual_lap_marking(video_path, start_time: float = 0.0, existing_boundar
     selected_lap_idx = -1
 
     # Start at specified time
-    current_frame = int(start_time * fps)
+    current_frame = _time_to_frame(start_time, pts, fps, total_frames)
     
     window_name = "Manual Lap Marking - Space: Mark/Unmark | Enter: Finish"
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
@@ -239,9 +307,9 @@ def run_manual_lap_marking(video_path, start_time: float = 0.0, existing_boundar
                 break
         else:
             last_valid_frame = frame.copy()
-            
-        video_time = current_frame / fps
-        
+
+        video_time = _frame_to_time(current_frame, pts, fps)
+
         # Prepare Info Text
         info_text = [
             f"Video Time: {video_time:.3f}s",
@@ -340,21 +408,21 @@ def run_manual_lap_marking(video_path, start_time: float = 0.0, existing_boundar
         elif key == ord('p'): # Predictive next
             if predict_available:
                 target = max(0.0, min(predict_target, duration))
-                current_frame = int(target * fps)
+                current_frame = _time_to_frame(target, pts, fps, total_frames)
                 print(f"[Predict] Jumped to {target:.1f}s (last lap {last_lap:.1f}s)")
 
         elif key == 9:  # Tab - next lap
             if sorted_boundaries:
                 selected_lap_idx = (selected_lap_idx + 1) % len(sorted_boundaries)
                 target = sorted_boundaries[selected_lap_idx]
-                current_frame = int(target * fps)
+                current_frame = _time_to_frame(target, pts, fps, total_frames)
                 print(f"[Nav] Lap {selected_lap_idx + 1} at {target:.3f}s")
 
         elif key == ord('`'):  # Backtick - prev lap
             if sorted_boundaries:
                 selected_lap_idx = (selected_lap_idx - 1) % len(sorted_boundaries)
                 target = sorted_boundaries[selected_lap_idx]
-                current_frame = int(target * fps)
+                current_frame = _time_to_frame(target, pts, fps, total_frames)
                 print(f"[Nav] Lap {selected_lap_idx + 1} at {target:.3f}s")
 
         # Seek controls
@@ -393,6 +461,9 @@ def run_trim_selection(video_path):
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     duration = total_frames / fps
     frames_7s = int(7 * fps)
+    pts = _extract_video_pts(video_path)
+    if pts is not None:
+        duration = float(pts[-1])
 
     current_frame = 0
     start_time = 0.0
@@ -432,7 +503,7 @@ def run_trim_selection(video_path):
                 break
 
         # Overlay Info
-        current_time = current_frame / fps
+        current_time = _frame_to_time(current_frame, pts, fps)
         
         # Helper text
         text_lines = [
