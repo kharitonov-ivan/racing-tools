@@ -545,6 +545,62 @@ def group_videos(video_data: List[VideoData]) -> List[List[VideoData]]:
     return groups
 
 
+def _probe_video_codec(file_path: Path) -> Optional[str]:
+    """Return the video codec name (e.g. 'h264', 'hevc') or None on failure."""
+    try:
+        data = ffmpeg.probe(str(file_path), select_streams="v:0", show_entries="stream=codec_name")
+        streams = data.get("streams", [])
+        if streams:
+            return streams[0].get("codec_name")
+    except ffmpeg.Error:
+        pass
+    return None
+
+
+def _concat_via_ts_protocol(group: List[VideoData], out_path: Path) -> None:
+    """Concat via MPEG-TS protocol — produces gap-free PTS at chapter seams.
+
+    Why: ffmpeg's concat demuxer with -c copy preserves the per-chapter PTS
+    discontinuity that GoPro cameras leave between recording segments
+    (typically ~0.5s at the GH02→GH03 seam from audio frame alignment).
+    Remuxing each chapter to MPEG-TS strips PTS discontinuity info, then the
+    concat protocol stitches them with continuous PTS. Trade-off: GPMF
+    telemetry stream (data:gpmd) is dropped — fine for this project since
+    telemetry comes from AiM XRK, not GoPro.
+    """
+    codec = _probe_video_codec(group[0]["file"]) or "h264"
+    bsf_map = {"h264": "h264_mp4toannexb", "hevc": "hevc_mp4toannexb"}
+    video_bsf = bsf_map.get(codec)
+    if video_bsf is None:
+        raise RuntimeError(f"Unsupported video codec for TS concat: {codec}")
+
+    ts_paths: list[Path] = []
+    try:
+        for v in group:
+            ts_path = out_path.with_name(f".{out_path.stem}__{v['file'].stem}.ts")
+            (
+                ffmpeg.input(str(v["file"]))
+                .output(str(ts_path), c="copy", **{"bsf:v": video_bsf}, f="mpegts")
+                .overwrite_output()
+                .run(capture_stdout=True, capture_stderr=True)
+            )
+            ts_paths.append(ts_path)
+
+        concat_input = "concat:" + "|".join(str(p) for p in ts_paths)
+        (
+            ffmpeg.input(concat_input)
+            .output(str(out_path), c="copy", **{"bsf:a": "aac_adtstoasc"})
+            .overwrite_output()
+            .run(capture_stdout=True, capture_stderr=True)
+        )
+    finally:
+        for p in ts_paths:
+            try:
+                p.unlink()
+            except OSError:
+                pass
+
+
 def export_group(group: List[VideoData], output_folder: Path) -> None:
     first = group[0]
     name = first["start_time"].strftime("%Y-%m-%d_%H-%M-%S") if first["start_time"] else f"unknown_{first['file'].stem}"
@@ -553,23 +609,34 @@ def export_group(group: List[VideoData], output_folder: Path) -> None:
     if len(group) == 1:
         console.print(f"Copying {first['file'].name} -> {out_path.name}")
         shutil.copy2(first["file"], out_path)
-    else:
-        console.print(f"Concatenating {len(group)} files -> {out_path.name}")
-        list_file = output_folder / "concat_list.txt"
-        with open(list_file, "w") as f:
-            for v in group:
-                safe_path = str(v["file"].absolute()).replace("'", "'\\''")
-                f.write(f"file '{safe_path}'\n")
+        return
 
+    is_gopro_group = all(parse_gopro_filename(v["file"]) for v in group)
+    if is_gopro_group:
+        console.print(f"Concatenating {len(group)} GoPro chapters via TS-protocol -> {out_path.name}")
         try:
-            (
-                ffmpeg.input(str(list_file), format="concat", safe=0)
-                .output(str(out_path), c="copy", y=None)
-                .run(capture_stdout=True, capture_stderr=True)
-            )
-        except ffmpeg.Error as e:
-            console.print(f"[red]Concat failed: {e.stderr.decode() if e.stderr else str(e)}[/red]")
-        list_file.unlink()
+            _concat_via_ts_protocol(group, out_path)
+            return
+        except (ffmpeg.Error, RuntimeError) as e:
+            err = e.stderr.decode() if isinstance(e, ffmpeg.Error) and e.stderr else str(e)
+            console.print(f"[yellow]TS concat failed ({err}); falling back to demuxer concat[/yellow]")
+
+    console.print(f"Concatenating {len(group)} files -> {out_path.name}")
+    list_file = output_folder / "concat_list.txt"
+    with open(list_file, "w") as f:
+        for v in group:
+            safe_path = str(v["file"].absolute()).replace("'", "'\\''")
+            f.write(f"file '{safe_path}'\n")
+
+    try:
+        (
+            ffmpeg.input(str(list_file), format="concat", safe=0)
+            .output(str(out_path), c="copy", y=None)
+            .run(capture_stdout=True, capture_stderr=True)
+        )
+    except ffmpeg.Error as e:
+        console.print(f"[red]Concat failed: {e.stderr.decode() if e.stderr else str(e)}[/red]")
+    list_file.unlink()
 
 
 def compute_flow_magnitude(frame1: np.ndarray, frame2: np.ndarray) -> float:
