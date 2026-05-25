@@ -608,7 +608,12 @@ def export_group(group: List[VideoData], output_folder: Path) -> None:
 
     if len(group) == 1:
         console.print(f"Copying {first['file'].name} -> {out_path.name}")
-        shutil.copy2(first["file"], out_path)
+        try:
+            shutil.copy2(first["file"], out_path)
+        except PermissionError:
+            if not out_path.exists() or out_path.stat().st_size != first["file"].stat().st_size:
+                raise
+            console.print("[yellow]Copied file data, but preserving metadata failed[/yellow]")
         return
 
     is_gopro_group = all(parse_gopro_filename(v["file"]) for v in group)
