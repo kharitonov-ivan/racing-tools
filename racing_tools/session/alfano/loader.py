@@ -87,17 +87,24 @@ def _resample_100hz(frame: pd.DataFrame) -> pd.DataFrame:
     frame = frame.set_index("Time")
     if len(frame) < 2:
         return frame.reset_index()
-    # Merge duplicate timestamps (e.g. RPM sub-channel rows on same time as base row)
     if frame.index.duplicated().any():
-        frame = frame.groupby(level=0).first().combine_first(
-            frame.groupby(level=0).last()
-        )
+        frame = frame.groupby(level=0).first().combine_first(frame.groupby(level=0).last())
+
     t = frame.index
     uniform_t = np.arange(t.min(), t.max() + 0.005, 0.01)
-    frame = frame.reindex(frame.index.union(uniform_t)).interpolate(method="index").reindex(uniform_t)
-    frame = frame.ffill().bfill()
-    frame.index.name = "Time"
-    return frame.reset_index()
+    expanded_index = frame.index.union(uniform_t)
+    stepwise_cols = [col for col in ["Lap Number"] if col in frame.columns]
+
+    interpolated = frame.drop(columns=stepwise_cols, errors="ignore")
+    interpolated = interpolated.reindex(expanded_index).interpolate(method="index").reindex(uniform_t)
+    interpolated = interpolated.ffill().bfill()
+
+    for col in stepwise_cols:
+        stepwise = frame[[col]].reindex(expanded_index).ffill().bfill().reindex(uniform_t)
+        interpolated[col] = pd.to_numeric(stepwise[col], errors="coerce").round().astype(int)
+
+    interpolated.index.name = "Time"
+    return interpolated.reset_index()
 
 
 def _read_summary_lap_times(folder: Path) -> list[float] | None:
