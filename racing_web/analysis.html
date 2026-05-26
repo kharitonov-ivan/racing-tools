@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Racing Tools · Lap Analysis</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="analysis.css">
+</head>
+<body>
+    <div class="analysis-app">
+        <aside class="nav-shell">
+            <div class="brand"><span class="brand-mark">RT</span><strong>Racing Tools</strong></div>
+            <a href="index.html">Overlay Studio</a>
+            <a class="active" href="analysis.html">Analysis</a>
+            <a href="#">Setups</a>
+            <a href="#">Tracks</a>
+            <div class="pro-card">Garage-style telemetry workspace with local demo data.</div>
+        </aside>
+
+        <main class="analysis-main">
+            <header class="topbar">
+                <div class="crumb">⌂ / Analyze Laps</div>
+                <div class="toolbar">
+                    <button id="navigate-btn">Navigate</button>
+                    <button id="prev-btn">‹</button>
+                    <select id="view-select">
+                        <option value="driving">Driving style</option>
+                        <option value="cornering">Cornering</option>
+                    </select>
+                    <button id="next-btn">›</button>
+                    <strong>Demo lap analysis</strong>
+                    <span id="readout" class="readout">Hover telemetry</span>
+                </div>
+            </header>
+
+            <section class="workspace">
+                <aside class="lap-panel">
+                    <h2>Laps:</h2>
+                    <div id="lap-list"></div>
+                    <h2>Gaps:</h2>
+                    <div id="sector-table" class="sector-table"></div>
+                </aside>
+
+                <section class="map-panel panel">
+                    <div class="panel-title">Track map</div>
+                    <div class="zoom-controls"><button id="zoom-in">+</button><button id="zoom-out">−</button></div>
+                    <canvas id="track-map"></canvas>
+                    <div id="map-legend" class="map-legend"></div>
+                </section>
+
+                <section id="charts" class="charts-panel"></section>
+            </section>
+
+            <footer id="sector-strip" class="sector-strip"></footer>
+        </main>
+    </div>
+    <script src="analysis.js"></script>
+</body>
+</html>
