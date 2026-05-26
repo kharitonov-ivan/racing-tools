@@ -32,7 +32,7 @@ class ChannelNormalizer:
         for key, spec in self.transforms.items():
             if key not in data.columns:
                 continue
-            series = pd.to_numeric(data[key], errors="coerce").fillna(0.0)
+            series = pd.to_numeric(data[key], errors="coerce")
             scale = spec.get("scale", 1.0)
             offset = spec.get("offset", 0.0)
             if scale != 1.0:
