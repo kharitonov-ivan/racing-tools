@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Racing Tools · Lap Analysis</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="analysis.css">
+</head>
+<body>
+    <div class="analysis-app">
+        <aside class="nav-shell">
+            <div class="brand"><span class="brand-mark">RT</span><strong>Racing Tools</strong></div>
+            <a href="index.html">Overlay Studio</a>
+            <a class="active" href="analysis.html">Analysis</a>
+            <a href="#">Setups</a>
+            <a href="#">Tracks</a>
+            <div class="pro-card">Telemetry workspace with local demo data.</div>
+        </aside>
+
+        <main class="analysis-main">
+            <header class="topbar">
+                <div class="crumb">⌂ / Analyze Laps</div>
+                <div class="toolbar">
+                    <button id="navigate-btn">Navigate</button>
+                    <button id="prev-btn">‹</button>
+                    <select id="view-select">
+                        <option value="driving">Driving style</option>
+                        <option value="cornering">Cornering</option>
+                    </select>
+                    <select id="axis-select">
+                        <option value="distance">Distance axis</option>
+                        <option value="time">Time axis</option>
+                    </select>
+                    <button id="x-zoom-out-btn" title="Zoom charts out horizontally">H−</button>
+                    <button id="x-zoom-reset-btn" title="Reset chart horizontal zoom">1:1</button>
+                    <button id="x-zoom-in-btn" title="Zoom charts in horizontally">H+</button>
+                    <button id="next-btn">›</button>
+                    <strong>Demo comparison analysis</strong>
+                    <span id="readout" class="readout">Hover telemetry</span>
+                </div>
+            </header>
+
+            <section class="workspace">
+                <aside class="lap-panel">
+                    <section class="loader-panel">
+                        <h2>Data:</h2>
+                        <label class="loader-field">
+                            <span>Track path</span>
+                            <div class="loader-input-row">
+                                <input id="track-path" type="text" value="racing_tools/track/data/RIMSportKarting" spellcheck="false">
+                                <button type="button" class="picker-btn" data-pick-target="track" data-pick-mode="directory" data-input-id="track-path">Browse</button>
+                            </div>
+                        </label>
+                        <div class="loader-field">
+                            <div class="loader-field-head">
+                                <span>Sessions / laps</span>
+                                <button id="add-session-btn" type="button" class="picker-btn">+ Session</button>
+                            </div>
+                            <div id="session-rows" class="session-rows"></div>
+                            <div class="loader-hint">Load 1-6 laps. The first two drive sector gaps and delta charts; extra laps stay overlaid on the map and telemetry plots.</div>
+                        </div>
+                        <div class="loader-actions">
+                            <button id="load-data-btn">Load data</button>
+                            <span id="load-status" class="load-status">Demo data loaded. Start analysis_server.py to load real files.</span>
+                        </div>
+                    </section>
+                    <h2>Laps:</h2>
+                    <div id="lap-list"></div>
+                    <h2>Gaps:</h2>
+                    <div id="sector-table" class="sector-table"></div>
+                </aside>
+                <div class="splitter" data-splitter="left" title="Drag to resize lap panel"></div>
+
+                <section class="map-panel panel">
+                    <div class="map-stage">
+                        <div class="panel-title">Track map</div>
+                        <div class="zoom-controls"><button id="zoom-in">+</button><button id="zoom-out">−</button></div>
+                        <canvas id="track-map"></canvas>
+                        <div id="map-legend" class="map-legend"></div>
+                    </div>
+                    <section id="center-charts" class="center-charts"></section>
+                    <div id="compare-legend" class="compare-legend"></div>
+                </section>
+                <div class="splitter" data-splitter="right" title="Drag to resize telemetry charts"></div>
+
+                <section id="charts" class="charts-panel"></section>
+            </section>
+
+            <footer id="sector-strip" class="sector-strip"></footer>
+        </main>
+    </div>
+    <script src="analysis.js"></script>
+</body>
+</html>
