@@ -92,6 +92,42 @@ function bindControls() {
     document.getElementById("next-btn").onclick = () => selectSector((state.sector + 1) % 7);
     document.getElementById("navigate-btn").onclick = () => selectSector(0);
     document.getElementById("view-select").onchange = event => setView(event.target.value);
+    bindSplitters();
+}
+
+function bindSplitters() {
+    document.querySelectorAll(".splitter").forEach(splitter => {
+        splitter.addEventListener("pointerdown", event => startResize(event, splitter));
+    });
+}
+
+function startResize(event, splitter) {
+    const workspace = document.querySelector(".workspace");
+    const rect = workspace.getBoundingClientRect();
+    const mode = splitter.dataset.splitter;
+    splitter.setPointerCapture(event.pointerId);
+    splitter.classList.add("dragging");
+    document.body.classList.add("resizing");
+
+    splitter.onpointermove = moveEvent => {
+        if (mode === "left") {
+            const width = clamp(moveEvent.clientX - rect.left, 170, 420);
+            workspace.style.setProperty("--left-panel", `${width}px`);
+        } else {
+            const width = clamp(rect.right - moveEvent.clientX, 260, 620);
+            workspace.style.setProperty("--right-panel", `${width}px`);
+        }
+        resizeAll();
+    };
+    splitter.onpointerup = () => stopResize(splitter);
+    splitter.onpointercancel = () => stopResize(splitter);
+}
+
+function stopResize(splitter) {
+    splitter.onpointermove = null;
+    splitter.classList.remove("dragging");
+    document.body.classList.remove("resizing");
+    resizeAll();
 }
 
 function setView(view) {

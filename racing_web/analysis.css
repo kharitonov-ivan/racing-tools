@@ -77,12 +77,29 @@ button:hover, select:hover { background: #2b3540; }
     min-height: 0;
     min-width: 0;
     display: grid;
-    grid-template-columns: 240px minmax(0, 1fr) minmax(300px, 380px);
-    gap: 1px;
+    grid-template-columns: var(--left-panel, 240px) 7px minmax(0, 1fr) 7px var(--right-panel, 380px);
+    gap: 0;
     background: var(--border);
     overflow: hidden;
 }
 .lap-panel, .panel, .charts-panel { background: var(--panel); min-height: 0; }
+.splitter {
+    background: var(--border);
+    cursor: col-resize;
+    position: relative;
+    z-index: 4;
+}
+.splitter::after {
+    content: "";
+    position: absolute;
+    inset: 0 2px;
+    background: rgba(255, 255, 255, 0.08);
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+.splitter:hover::after,
+.splitter.dragging::after { opacity: 1; }
+body.resizing { cursor: col-resize; user-select: none; }
 .lap-panel { padding: 1rem; overflow: auto; }
 h2 { font-size: 1rem; margin: 0.2rem 0 0.7rem; }
 .lap-row, .sector-row {
@@ -153,5 +170,5 @@ h2 { font-size: 1rem; margin: 0.2rem 0 0.7rem; }
 @media (max-width: 1100px) {
     .analysis-app { grid-template-columns: 1fr; }
     .nav-shell { display: none; }
-    .workspace { grid-template-columns: 210px minmax(0, 1fr) minmax(280px, 340px); }
+    .workspace { grid-template-columns: var(--left-panel, 210px) 7px minmax(0, 1fr) 7px var(--right-panel, 340px); }
 }
