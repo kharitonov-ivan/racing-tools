@@ -44,10 +44,20 @@ VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi", ".ts", ".m4v"}
 NVENC_BUFSIZE = "30M"
 NVENC_LOOKAHEAD = 60
 NVENC_AQ_STRENGTH = 15
-NVENC_B_FRAMES = 5
-NVENC_GOP_SIZE = 60
-SVTAV1_GOP_SIZE = 60
-X265_GOP_SIZE = 60
+DEFAULT_BITRATE = "15M"
+DEFAULT_MAXRATE = "20M"
+RESOLUTION_BITRATE_PRESETS = {
+    720: ("10M", "16M"),
+    1080: (DEFAULT_BITRATE, DEFAULT_MAXRATE),
+    1440: ("25M", "35M"),
+    2160: ("45M", "60M"),
+}
+
+# Seek-friendly defaults: short GOP + no B-frames keeps OpenCV frame seeking
+# responsive (keyframe ~every 0.5-1s, no reorder ambiguity). Raise GOP / add
+# B-frames for smaller files when accurate random seek is not needed.
+DEFAULT_GOP_SIZE = 30
+DEFAULT_B_FRAMES = 2
 
 
 def get_video_files(input_dir: Path, recursive: bool = False) -> list[Path]:
@@ -60,7 +70,7 @@ def get_video_files(input_dir: Path, recursive: bool = False) -> list[Path]:
     return sorted(list(set(files)))
 
 
-def build_av1_nvenc_args(cq: int, preset: str, bitrate: str, maxrate: str) -> list[str]:
+def build_av1_nvenc_args(cq: int, preset: str, bitrate: str, maxrate: str, gop: int, bframes: int) -> list[str]:
     """Build ffmpeg arguments for AV1 NVENC encoder."""
     return [
         "-preset",
@@ -88,15 +98,15 @@ def build_av1_nvenc_args(cq: int, preset: str, bitrate: str, maxrate: str) -> li
         "-aq-strength",
         str(NVENC_AQ_STRENGTH),
         "-bf",
-        str(NVENC_B_FRAMES),
+        str(bframes),
         "-g",
-        str(NVENC_GOP_SIZE),
+        str(gop),
         "-pix_fmt",
         "yuv420p10le",
     ]
 
 
-def build_hevc_nvenc_args(cq: int, preset: str, bitrate: str, maxrate: str) -> list[str]:
+def build_hevc_nvenc_args(cq: int, preset: str, bitrate: str, maxrate: str, gop: int, bframes: int) -> list[str]:
     """Build ffmpeg arguments for HEVC NVENC encoder."""
     return [
         "-preset",
@@ -124,15 +134,15 @@ def build_hevc_nvenc_args(cq: int, preset: str, bitrate: str, maxrate: str) -> l
         "-aq-strength",
         str(NVENC_AQ_STRENGTH),
         "-bf",
-        str(NVENC_B_FRAMES),
+        str(bframes),
         "-g",
-        str(NVENC_GOP_SIZE),
+        str(gop),
         "-pix_fmt",
         "yuv420p10le",
     ]
 
 
-def build_svtav1_args(cq: int, preset: str) -> list[str]:
+def build_svtav1_args(cq: int, preset: str, gop: int) -> list[str]:
     """Build ffmpeg arguments for SVT-AV1 encoder."""
     preset_map = {"p7": "2", "p6": "3", "p5": "4", "p4": "5", "p3": "6", "p2": "7", "p1": "8"}
     sv_preset = preset_map.get(preset, "4")
@@ -144,13 +154,13 @@ def build_svtav1_args(cq: int, preset: str) -> list[str]:
         "-svtav1-params",
         "fast-decode=1:tune=0",
         "-g",
-        str(SVTAV1_GOP_SIZE),
+        str(gop),
         "-pix_fmt",
         "yuv420p10le",
     ]
 
 
-def build_x265_args(cq: int, preset: str) -> list[str]:
+def build_x265_args(cq: int, preset: str, gop: int) -> list[str]:
     """Build ffmpeg arguments for x265 encoder."""
     preset_map = {"p7": "veryslow", "p6": "slower", "p5": "slow", "p4": "medium", "p3": "fast", "p2": "faster", "p1": "veryfast"}
     x265_preset = preset_map.get(preset, "slow")
@@ -162,13 +172,13 @@ def build_x265_args(cq: int, preset: str) -> list[str]:
         "-x265-params",
         "aq-mode=3:psy-rd=1.0",
         "-g",
-        str(X265_GOP_SIZE),
+        str(gop),
         "-pix_fmt",
         "yuv420p10le",
     ]
 
 
-def build_x264_args(cq: int, preset: str) -> list[str]:
+def build_x264_args(cq: int, preset: str, gop: int) -> list[str]:
     """Build ffmpeg arguments for x264 encoder."""
     preset_map = {"p7": "veryslow", "p6": "slower", "p5": "slow", "p4": "medium", "p3": "fast", "p2": "faster", "p1": "veryfast"}
     x264_preset = preset_map.get(preset, "slow")
@@ -180,13 +190,15 @@ def build_x264_args(cq: int, preset: str) -> list[str]:
         "-tune",
         "film",
         "-g",
-        str(X265_GOP_SIZE),
+        str(gop),
         "-pix_fmt",
         "yuv420p",
     ]
 
 
-def get_video_codec_args(codec: str, cq: int, preset: str, bitrate: str, maxrate: str) -> list[str]:
+def get_video_codec_args(
+    codec: str, cq: int, preset: str, bitrate: str, maxrate: str, gop: int, bframes: int
+) -> list[str]:
     """Get encoder-specific arguments for video codec.
 
     Quality recommendations:
@@ -199,15 +211,15 @@ def get_video_codec_args(codec: str, cq: int, preset: str, bitrate: str, maxrate
     base_args = ["-c:v", codec]
 
     if codec == "av1_nvenc":
-        codec_args = build_av1_nvenc_args(cq, preset, bitrate, maxrate)
+        codec_args = build_av1_nvenc_args(cq, preset, bitrate, maxrate, gop, bframes)
     elif codec == "hevc_nvenc":
-        codec_args = build_hevc_nvenc_args(cq, preset, bitrate, maxrate)
+        codec_args = build_hevc_nvenc_args(cq, preset, bitrate, maxrate, gop, bframes)
     elif codec == "libsvtav1":
-        codec_args = build_svtav1_args(cq, preset)
+        codec_args = build_svtav1_args(cq, preset, gop)
     elif codec == "libx265":
-        codec_args = build_x265_args(cq, preset)
+        codec_args = build_x265_args(cq, preset, gop)
     elif codec == "libx264":
-        codec_args = build_x264_args(cq, preset)
+        codec_args = build_x264_args(cq, preset, gop)
     else:
         print(f"[Warning] Unknown codec '{codec}', using default settings")
         codec_args = ["-q:v", str(cq)]
@@ -225,11 +237,13 @@ def build_ffmpeg_command(
     no_audio: bool,
     bitrate: str,
     maxrate: str,
+    gop: int,
+    bframes: int,
     resolution: int | None = None,
 ) -> list[str]:
     """Build complete ffmpeg command line arguments."""
     hwaccel_args = ["-hwaccel", "cuda"] if "nvenc" in codec else []
-    video_args = get_video_codec_args(codec, cq, preset, bitrate, maxrate)
+    video_args = get_video_codec_args(codec, cq, preset, bitrate, maxrate, gop, bframes)
 
     cmd = [
         "ffmpeg",
@@ -267,6 +281,8 @@ def transcode_file(
     no_audio: bool = False,
     bitrate: str = "15M",
     maxrate: str = "20M",
+    gop: int = DEFAULT_GOP_SIZE,
+    bframes: int = DEFAULT_B_FRAMES,
     resolution: int | None = None,
 ) -> bool:
     """Transcode a single file using ffmpeg."""
@@ -276,7 +292,9 @@ def transcode_file(
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    cmd = build_ffmpeg_command(input_path, output_path, codec, cq, preset, overwrite, no_audio, bitrate, maxrate, resolution)
+    cmd = build_ffmpeg_command(
+        input_path, output_path, codec, cq, preset, overwrite, no_audio, bitrate, maxrate, gop, bframes, resolution
+    )
 
     try:
         subprocess.run(cmd, check=True)
@@ -305,7 +323,7 @@ def transcode_single_file(args) -> bool:
 
     print(f"Input:  {input_path}")
     print(f"Output: {output_path}")
-    print(f"Settings: Codec={args.codec}, Preset={args.preset}, CQ={args.cq}")
+    print(f"Settings: Codec={args.codec}, Preset={args.preset}, CQ={args.cq}, Bitrate={args.bitrate}, Maxrate={args.maxrate}")
     print("-" * 40)
 
     success = transcode_file(
@@ -318,6 +336,8 @@ def transcode_single_file(args) -> bool:
         no_audio=args.no_audio,
         bitrate=args.bitrate,
         maxrate=args.maxrate,
+        gop=args.gop,
+        bframes=args.bframes,
         resolution=args.resolution,
     )
     print("-" * 40)
@@ -343,7 +363,7 @@ def transcode_multiple_files(args) -> int:
 
     print(f"Found {len(videos)} video(s).")
     print(f"Output directory: {output_dir}")
-    print(f"Settings: Codec={args.codec}, Preset={args.preset}, CQ={args.cq}")
+    print(f"Settings: Codec={args.codec}, Preset={args.preset}, CQ={args.cq}, Bitrate={args.bitrate}, Maxrate={args.maxrate}")
     print("-" * 40)
 
     success_count = 0
@@ -367,6 +387,8 @@ def transcode_multiple_files(args) -> int:
             no_audio=args.no_audio,
             bitrate=args.bitrate,
             maxrate=args.maxrate,
+            gop=args.gop,
+            bframes=args.bframes,
             resolution=args.resolution,
         ):
             success_count += 1
@@ -374,6 +396,21 @@ def transcode_multiple_files(args) -> int:
     print("-" * 40)
     print(f"Done. Successfully processed {success_count}/{len(videos)} files.")
     return success_count
+
+
+def resolve_bitrate_settings(args: argparse.Namespace) -> None:
+    """Apply bitrate defaults, lowering them automatically for lower output resolutions."""
+    if args.bitrate is not None and args.maxrate is not None:
+        return
+
+    preset_bitrate, preset_maxrate = RESOLUTION_BITRATE_PRESETS.get(
+        args.resolution,
+        (DEFAULT_BITRATE, DEFAULT_MAXRATE),
+    )
+    if args.bitrate is None:
+        args.bitrate = preset_bitrate
+    if args.maxrate is None:
+        args.maxrate = preset_maxrate
 
 
 def parse_args() -> argparse.Namespace:
@@ -402,14 +439,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--bitrate",
         type=str,
-        default="15M",
-        help="Target bitrate for VBR. Default: 15M",
+        default=None,
+        help=f"Target bitrate for VBR. Default: auto by resolution ({DEFAULT_BITRATE} for 1080p, 12M for 720p)",
     )
     parser.add_argument(
         "--maxrate",
         type=str,
-        default="20M",
-        help="Max bitrate for VBR. Default: 20M",
+        default=None,
+        help=f"Max bitrate for VBR. Default: auto by resolution ({DEFAULT_MAXRATE} for 1080p, 18M for 720p)",
+    )
+    parser.add_argument(
+        "--gop",
+        type=int,
+        default=DEFAULT_GOP_SIZE,
+        help=f"Keyframe interval (frames). Smaller = faster/more accurate OpenCV seek, larger files. Default: {DEFAULT_GOP_SIZE}",
+    )
+    parser.add_argument(
+        "--bframes",
+        type=int,
+        default=DEFAULT_B_FRAMES,
+        help=f"B-frames (NVENC only). 0 = best for OpenCV frame seeking; raise for smaller files. Default: {DEFAULT_B_FRAMES}",
     )
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing output files.")
     parser.add_argument("--no-audio", action="store_true", help="Discard audio stream.")
@@ -421,7 +470,9 @@ def parse_args() -> argparse.Namespace:
         help="Output height in pixels (e.g., 1080, 720). Width auto-calculated to maintain aspect ratio.",
     )
 
-    return parser.parse_args()
+    args = parser.parse_args()
+    resolve_bitrate_settings(args)
+    return args
 
 
 def main() -> None:
