@@ -472,7 +472,58 @@ def is_continuous(prev: VideoData, curr: VideoData) -> bool:
     return False
 
 
+def _reorder_gopro_chapters(video_data: List[VideoData]) -> List[VideoData]:
+    """Re-order GoPro chapters so all chapters of the same file_id are adjacent.
+
+    GoPro splits long recordings into ~8-9 minute chapters named
+    GX/H{chapter:02d}{file_id:04d}.MP4.  When files from multiple recordings
+    are mixed in one folder, alphabetical sort may scatter chapters across
+    the list (e.g. GH018894 … GH028894 with GH018895–GH018904 in between).
+    This function groups chapters of each file_id together, sorted by chapter
+    number, preserving the position of the *first* chapter of each file_id
+    relative to non-GoPro files.
+    """
+    # Separate GoPro chapters by file_id
+    gopro_groups: dict[int, list[VideoData]] = {}
+    non_gopro: list[VideoData] = []
+
+    for v in video_data:
+        parsed = parse_gopro_filename(v["file"])
+        if parsed:
+            _, fid = parsed
+            gopro_groups.setdefault(fid, []).append(v)
+        else:
+            non_gopro.append(v)
+
+    if not gopro_groups or all(len(g) <= 1 for g in gopro_groups.values()):
+        return video_data  # no multi-chapter groups, nothing to do
+
+    # Sort each group by chapter number
+    for fid in gopro_groups:
+        gopro_groups[fid].sort(key=lambda v: parse_gopro_filename(v["file"])[0])
+
+    # Rebuild list: each GoPro file_id group appears at the position of its
+    # first chapter; non-GoPro files stay in their original relative order.
+    result: list[VideoData] = []
+    emitted_fids: set[int] = set()
+
+    for v in video_data:
+        parsed = parse_gopro_filename(v["file"])
+        if parsed:
+            _, fid = parsed
+            if fid not in emitted_fids:
+                emitted_fids.add(fid)
+                result.extend(gopro_groups[fid])
+        else:
+            result.append(v)
+
+    return result
+
+
 def group_videos(video_data: List[VideoData]) -> List[List[VideoData]]:
+    # Pre-group GoPro chapters so they sit next to each other
+    video_data = _reorder_gopro_chapters(video_data)
+
     # Initial pass to fill missing times
     for v in video_data:
         if v["start_time"] and not v["end_time"]:
@@ -629,11 +680,7 @@ def export_group(group: List[VideoData], output_folder: Path) -> None:
             f.write(f"file '{safe_path}'\n")
 
     try:
-        (
-            ffmpeg.input(str(list_file), format="concat", safe=0)
-            .output(str(out_path), c="copy", y=None)
-            .run(capture_stdout=True, capture_stderr=True)
-        )
+        (ffmpeg.input(str(list_file), format="concat", safe=0).output(str(out_path), c="copy", y=None).run(capture_stdout=True, capture_stderr=True))
     except ffmpeg.Error as e:
         console.print(f"[red]Concat failed: {e.stderr.decode() if e.stderr else str(e)}[/red]")
     list_file.unlink()
@@ -820,6 +867,53 @@ def order_videos_by_optical_flow(
     return groups
 
 
+OPTICAL_MERGE_FLOW_THRESHOLD = 5.0  # mean flow in pixels; < this = same scene
+
+
+def _verify_groups_optical(groups: List[List[VideoData]]) -> List[List[VideoData]]:
+    """Merge adjacent groups whose boundary frames are optically continuous.
+
+    Extracts the last frame of group N and the first frame of group N+1,
+    then computes optical flow magnitude between them.  A low flow value
+    indicates the same scene — the groups are likely a single recording
+    that timestamp-/filename-based grouping failed to stitch.
+    """
+    if len(groups) <= 1:
+        return groups
+
+    merged = [list(groups[0])]
+
+    for i in range(1, len(groups)):
+        prev_group = merged[-1]
+        curr_group = groups[i]
+
+        last_v = prev_group[-1]
+        first_v = curr_group[0]
+
+        console.print(
+            f"  Optical check: {last_v['file'].name} → {first_v['file'].name} ...",
+            end="",
+        )
+
+        _, last_frame = extract_first_last_frames(last_v["file"])
+        first_frame, _ = extract_first_last_frames(first_v["file"])
+
+        if last_frame is None or first_frame is None:
+            console.print(" [yellow]frame extraction failed, skipping[/yellow]")
+            merged.append(list(curr_group))
+            continue
+
+        flow = compute_flow_magnitude(last_frame, first_frame)
+        if flow < OPTICAL_MERGE_FLOW_THRESHOLD:
+            console.print(f" [green]merge (flow={flow:.1f} < {OPTICAL_MERGE_FLOW_THRESHOLD})[/green]")
+            merged[-1].extend(curr_group)
+        else:
+            console.print(f" keep separate (flow={flow:.1f})")
+            merged.append(list(curr_group))
+
+    return merged
+
+
 def debug_crop(video_path: Path, output_dir: Path) -> None:
     """Debug video crop and OCR for a given video."""
     if not video_path.exists():
@@ -912,6 +1006,12 @@ def main():
             if fg:
                 groups.append(fg)
                 console.print(f"[yellow]  Flow group: {len(fg)} videos[/yellow]")
+
+    # Always verify group boundaries with optical flow.
+    # Catches cases where timestamp-/filename-based grouping missed a join
+    # (e.g. GoPro chapters scattered by alphabetical sort, or OCR errors).
+    console.print("\nVerifying group boundaries with optical flow...")
+    groups = _verify_groups_optical(groups)
 
     console.print(f"\nFound {len(groups)} groups:")
     for i, g in enumerate(groups):
